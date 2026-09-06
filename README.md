@@ -37,7 +37,6 @@ cargo test
 | `calculate_spreadsheet(cells)` | デフォルト閾値で層ごとに seq / rayon を自動選択 |
 | `calculate_spreadsheet_with_thresholds(cells, thresholds)` | 幅・仕事量の閾値を指定して適応並列 |
 | `ParallelThresholds` | `min_layer_width` / `min_layer_work`（`Default` は 4096 / 327680） |
-| `calculate_spreadsheet_with_parallel(cells, parallel)` | 層内並列を強制 ON/OFF（計測用・`doc(hidden)`） |
 | `CellValue` | `Number(f64)` / `Text(String)` |
 | `SpreadsheetError` | 循環参照・不正数式・ゼロ除算・`#NUM!` / `#VALUE!` / `#SPILL!` / `#CALC!` |
 
@@ -58,14 +57,12 @@ cargo test
 
 ### `FILTER` と soft-skip
 
-- `FILTER(array, include, [if_empty])` の `if_empty` は **空のときだけ**評価（lazy）。非空パスでは参照も依存に入れません
-- 静的に空／非空が分からないとき、`if_empty` の参照は集めますが、この `FILTER` 自身の静的スピル領域内のセルは除外します（自己スピル読みによる偽循環を防ぐ）
-- **soft-skip:** `include` などがスピル先を読み、かつその `FILTER` アンカーが読者に依存して循環になる場合、依存辺を張らずに評価し、その後アンカーと推移的依存を再評価して整合させます（最大 2 スイープ）
-- soft-skip の対象は **スピル源が `FILTER` のときだけ**（トップレベル、または `IFERROR` / `IF` / `IFS` / `SWITCH` / `LET` 経由。定数刈り込み後の死腕は対象外）。`SEQUENCE` などによる同様の循環は従来どおり `CircularReference` です。`SEQUENCE(..)+FILTER(..)` や `-FILTER(..)` のような演算子結合も soft-skip しません
+- `if_empty` は空のときだけ評価（lazy）
+- スピル先を読む `FILTER` が自己依存になる循環は、依存辺を張らず後から再評価して整合（最大 2 スイープ）。対象は `FILTER` スピル源のみ（`IFERROR` / `IF` / `IFS` / `SWITCH` / `LET` 経由可）。`SEQUENCE` や演算子で包んだ `FILTER` は soft-skip しない
 
 ### `LET`
 
-`LET(name1, value1, …, calculation)` でローカル束縛できます。名前は識別子または文字列リテラル。評価時にスコープされ、スピル形状・soft-skip 判定では計算式へ展開します。参照解析は束縛を宣言順に集め、すでに束縛した名前と計算式中の束縛名はシート参照にしません（値式のシート参照は依存に残します）。
+`LET(name1, value1, …, calculation)` でローカル束縛。識別子または文字列リテラル。束縛名はシート参照にせず、値式のシート参照だけ依存に残します。
 
 ### 対応関数
 
@@ -81,12 +78,12 @@ cargo test
 
 ## 並列の適応判定
 
-各評価層について次を満たすときだけ rayon を使います（`examples/bench_threshold` の実測交差点ベース）。
+各評価層について次を満たすときだけ rayon を使います。
 
 - 層のセル数 `>= min_layer_width`（デフォルト **4096**）
 - 層内の仕事量 `>= min_layer_work`（デフォルト **327680**＝セル参照の出現回数。A1 範囲は展開後のセル数）
 
-※ AST 化後の再計測（2026-09-05）では、以前の 1024×80 は speedup が 1 未満になり、初めて安定して ≥1.1 になったのは **4096×80** でした。
+※ デフォルトは speedup ≥ 1.1 になった格子点（幅 4096 × refs/cell 80）基準です。
 
 ### 閾値の決め方（キャリブレーション）
 
@@ -110,6 +107,19 @@ cargo run --release --example bench_threshold
 ```bash
 cargo build -p calc_spreadsheet_php --release
 ```
+
+成果物（Linux 例）: `target/release/libcalc_spreadsheet_php.so`
+
+1. `extension_dir` へコピーするか、絶対パスで指定する
+2. `php.ini`（または追加 ini）に例えば次を書く
+
+```ini
+extension=calc_spreadsheet_php
+; または
+; extension=/absolute/path/to/libcalc_spreadsheet_php.so
+```
+
+3. 確認: `php -m | grep calc_spreadsheet` および `php -r 'var_export(calc_spreadsheet(["A1"=>"1","B1"=>"=A1+1"]));'`
 
 ```php
 $result = calc_spreadsheet($cells);
