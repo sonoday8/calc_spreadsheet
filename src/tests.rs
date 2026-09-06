@@ -49,12 +49,223 @@ fn supports_sum_function() {
 }
 
 #[test]
-fn multi_cell_range_is_value_in_scalar_context() {
+fn multi_cell_range_spills_into_empty_cells() {
     let cells = [("A1", "1"), ("A2", "2"), ("B1", "=A1:A2")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+}
+
+#[test]
+fn element_wise_product_sum() {
+    let cells = [
+        ("A1", "2"),
+        ("A2", "3"),
+        ("A3", "4"),
+        ("B1", "10"),
+        ("B2", "20"),
+        ("B3", "30"),
+        ("C1", "=SUM(A1:A3*B1:B3)"),
+        ("D1", "=A1:A3*B1:B3"),
+        ("E1", "=SUM(A1:A3*2)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["C1"], 200.0);
+    assert_eq!(values["D1"], 20.0);
+    assert_eq!(values["D2"], 60.0);
+    assert_eq!(values["D3"], 120.0);
+    assert_eq!(values["E1"], 18.0);
+}
+
+#[test]
+fn element_wise_shape_mismatch_is_value() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("B1", "10"),
+        ("B2", "20"),
+        ("B3", "30"),
+        ("C1", "=SUM(A1:A2*B1:B3)"),
+    ];
     assert_eq!(
         calculate_spreadsheet(&cells),
         Err(SpreadsheetError::Value)
     );
+}
+
+#[test]
+fn spill_blocked_by_occupied_cell() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("B1", "=A1:A2"),
+        ("B2", "99"),
+    ];
+    assert_eq!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::Spill)
+    );
+}
+
+#[test]
+fn spilled_values_are_readable_by_other_formulas() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("B1", "=A1:A3"),
+        ("C1", "=SUM(B1:B3)"),
+        ("C2", "=B2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+    assert_eq!(values["C1"], 6.0);
+    assert_eq!(values["C2"], 2.0);
+}
+
+#[test]
+fn if_can_spill_array_branch() {
+    let cells = [
+        ("A1", "10"),
+        ("A2", "20"),
+        ("B1", "=IF(1, A1:A2, 0)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 10.0);
+    assert_eq!(values["B2"], 20.0);
+}
+
+#[test]
+fn sequence_spills_grid() {
+    let cells = [("A1", "=SEQUENCE(2, 3, 1, 1)")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["B1"], 2.0);
+    assert_eq!(values["C1"], 3.0);
+    assert_eq!(values["A2"], 4.0);
+    assert_eq!(values["B2"], 5.0);
+    assert_eq!(values["C2"], 6.0);
+}
+
+#[test]
+fn unique_sort_filter_pipeline() {
+    let cells = [
+        ("A1", "3"),
+        ("A2", "1"),
+        ("A3", "3"),
+        ("A4", "2"),
+        ("B1", "=UNIQUE(A1:A4)"),
+        ("C1", "=SORT(B1:B3)"),
+        ("D1", "=FILTER(A1:A4, A1:A4>2)"),
+        ("E1", "=FILTER(A1:A4, A1:A4>10, 0)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    // UNIQUE keeps first occurrence: 3, 1, 2
+    assert_eq!(values["B1"], 3.0);
+    assert_eq!(values["B2"], 1.0);
+    assert_eq!(values["B3"], 2.0);
+    // SORT ascending: 1, 2, 3
+    assert_eq!(values["C1"], 1.0);
+    assert_eq!(values["C2"], 2.0);
+    assert_eq!(values["C3"], 3.0);
+    // FILTER > 2: 3, 3
+    assert_eq!(values["D1"], 3.0);
+    assert_eq!(values["D2"], 3.0);
+    assert!(!values.contains_key("D3"));
+    // empty FILTER with if_empty
+    assert_eq!(values["E1"], 0.0);
+}
+
+#[test]
+fn filter_empty_without_fallback_is_calc() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("B1", "=FILTER(A1:A2, A1:A2>10)"),
+    ];
+    assert_eq!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::Calc)
+    );
+}
+
+#[test]
+fn sort_descending_by_column() {
+    let cells = [
+        ("A1", "10"),
+        ("B1", "1"),
+        ("A2", "30"),
+        ("B2", "2"),
+        ("A3", "20"),
+        ("B3", "3"),
+        ("D1", "=SORT(A1:B3, 1, -1)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["D1"], 30.0);
+    assert_eq!(values["E1"], 2.0);
+    assert_eq!(values["D2"], 20.0);
+    assert_eq!(values["E2"], 3.0);
+    assert_eq!(values["D3"], 10.0);
+    assert_eq!(values["E3"], 1.0);
+}
+
+#[test]
+fn spill_ref_operator_copies_spill() {
+    let cells = [
+        ("A1", "=SEQUENCE(3)"),
+        ("B1", "=A1#"),
+        ("C1", "=SUM(A1#)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["A3"], 3.0);
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+    assert_eq!(values["C1"], 6.0);
+}
+
+#[test]
+fn implicit_intersection_at_operator() {
+    let cells = [
+        ("A1", "10"),
+        ("A2", "20"),
+        ("A3", "30"),
+        ("B1", "1"),
+        ("B2", "2"),
+        ("B3", "3"),
+        ("C2", "=@A1:A3"),
+        ("D1", "=@B1:B3"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["C2"], 20.0); // same row as C2 → A2
+    assert_eq!(values["D1"], 1.0); // same row as D1 → B1
+}
+
+#[test]
+fn broadcast_row_times_column() {
+    let cells = [
+        ("A1", "1"),
+        ("B1", "2"),
+        ("C1", "3"),
+        ("D1", "10"),
+        ("D2", "20"),
+        ("D3", "30"),
+        ("E1", "=A1:C1*D1:D3"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["E1"], 10.0);
+    assert_eq!(values["F1"], 20.0);
+    assert_eq!(values["G1"], 30.0);
+    assert_eq!(values["E2"], 20.0);
+    assert_eq!(values["F2"], 40.0);
+    assert_eq!(values["G2"], 60.0);
+    assert_eq!(values["E3"], 30.0);
+    assert_eq!(values["F3"], 60.0);
+    assert_eq!(values["G3"], 90.0);
 }
 
 #[test]
@@ -227,10 +438,7 @@ fn average_without_args_is_division_by_zero() {
 fn sqrt_rejects_negative_values() {
     let cells = [("A1", "=SQRT(-1)")];
 
-    assert_eq!(
-        calculate_spreadsheet(&cells),
-        Err(SpreadsheetError::InvalidFormula("SQRT(-1)".to_string()))
-    );
+    assert_eq!(calculate_spreadsheet(&cells), Err(SpreadsheetError::Num));
 }
 
 #[test]
@@ -432,4 +640,822 @@ fn parallel_path_respects_dependency_layers() {
 
     let values = calculate_spreadsheet(&cells).unwrap();
     assert_eq!(values["B1"], 3.0);
+}
+
+#[test]
+fn unique_exactly_once_and_by_col() {
+    let cells = [
+        ("A1", "3"),
+        ("A2", "1"),
+        ("A3", "3"),
+        ("A4", "2"),
+        ("B1", "=UNIQUE(A1:A4, 0, 1)"),
+        ("C1", "1"),
+        ("D1", "1"),
+        ("E1", "2"),
+        ("C2", "10"),
+        ("D2", "10"),
+        ("E2", "20"),
+        ("F1", "=UNIQUE(C1:E2, 1)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    // exactly_once: 1 and 2 (3 appears twice)
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert!(!values.contains_key("B3"));
+    // by_col: columns [1,10] and [2,20] (duplicate [1,10] dropped)
+    assert_eq!(values["F1"], 1.0);
+    assert_eq!(values["G1"], 2.0);
+    assert_eq!(values["F2"], 10.0);
+    assert_eq!(values["G2"], 20.0);
+}
+
+#[test]
+fn sort_by_col_reorders_columns() {
+    let cells = [
+        ("A1", "3"),
+        ("B1", "1"),
+        ("C1", "2"),
+        ("A2", "30"),
+        ("B2", "10"),
+        ("C2", "20"),
+        ("D1", "=SORT(A1:C2, 1, 1, 1)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    // Sort columns by row 1 ascending: 1, 2, 3
+    assert_eq!(values["D1"], 1.0);
+    assert_eq!(values["E1"], 2.0);
+    assert_eq!(values["F1"], 3.0);
+    assert_eq!(values["D2"], 10.0);
+    assert_eq!(values["E2"], 20.0);
+    assert_eq!(values["F2"], 30.0);
+}
+
+#[test]
+fn filter_columns_with_row_include() {
+    let cells = [
+        ("A1", "1"),
+        ("B1", "2"),
+        ("C1", "3"),
+        ("D1", "=FILTER(A1:C1, A1:C1>1)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["D1"], 2.0);
+    assert_eq!(values["E1"], 3.0);
+    assert!(!values.contains_key("F1"));
+}
+
+#[test]
+fn sequence_zero_rows_is_calc_and_defaults_work() {
+    assert_eq!(
+        calculate_spreadsheet(&[("A1", "=SEQUENCE(0)")]),
+        Err(SpreadsheetError::Calc)
+    );
+    let values = calculate_spreadsheet(&[("B1", "=SEQUENCE(3)")]).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+}
+
+#[test]
+fn implicit_intersection_out_of_range_is_value() {
+    let cells = [
+        ("A1", "10"),
+        ("A2", "20"),
+        ("A3", "30"),
+        ("D5", "=@A1:A3"),
+    ];
+    assert_eq!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::Value)
+    );
+}
+
+#[test]
+fn implicit_intersection_on_spill_ref() {
+    let cells = [
+        ("A1", "=SEQUENCE(3)"),
+        ("B2", "=@A1#"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B2"], 2.0);
+}
+
+#[test]
+fn two_spills_into_same_cell_is_spill_error() {
+    // A2 spills into A2:B2; B1 spills into B1:B2 → conflict on B2.
+    let cells = [
+        ("A2", "=SEQUENCE(1, 2)"),
+        ("B1", "=SEQUENCE(2)"),
+    ];
+    assert_eq!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::Spill)
+    );
+}
+
+#[test]
+fn non_a1_anchor_does_not_spill_geometrically() {
+    let cells = [("Foo", "=SEQUENCE(3)")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["Foo"], 1.0);
+    assert!(!values.contains_key("Foo2"));
+    assert_eq!(values.len(), 1);
+}
+
+#[test]
+fn array_division_by_zero_is_error() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("B1", "0"),
+        ("B2", "1"),
+        ("C1", "=A1:A2/B1:B2"),
+    ];
+    assert_eq!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::DivisionByZero)
+    );
+}
+
+#[test]
+fn broadcast_column_times_row() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("B1", "10"),
+        ("C1", "20"),
+        ("D1", "=A1:A3*B1:C1"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["D1"], 10.0);
+    assert_eq!(values["E1"], 20.0);
+    assert_eq!(values["D2"], 20.0);
+    assert_eq!(values["E2"], 40.0);
+    assert_eq!(values["D3"], 30.0);
+    assert_eq!(values["E3"], 60.0);
+}
+
+#[test]
+fn unknown_cell_and_invalid_formula_errors() {
+    // Missing cells coerce to 0 (Excel-like); typos in function names still error.
+    let values = calculate_spreadsheet(&[("A1", "=Z99"), ("A2", "=Z99+1")]).unwrap();
+    assert_eq!(values["A1"], 0.0);
+    assert_eq!(values["A2"], 1.0);
+    assert!(matches!(
+        calculate_spreadsheet(&[("A1", "=((((")]),
+        Err(SpreadsheetError::InvalidFormula(_))
+    ));
+    assert!(matches!(
+        calculate_spreadsheet(&[("A1", "=NO_SUCH_FUNC(1)")]),
+        Err(SpreadsheetError::InvalidFormula(_))
+    ));
+}
+
+#[test]
+fn iferror_can_spill_array_result() {
+    let cells = [
+        ("A1", "10"),
+        ("A2", "20"),
+        ("B1", "=IFERROR(A1:A2, 0)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 10.0);
+    assert_eq!(values["B2"], 20.0);
+}
+
+#[test]
+fn count_counts_elements_of_array_expression() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("B1", "=COUNT(A1:A3*2)"),
+        ("B2", "=COUNTA(A1:A3*2)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 3.0);
+    assert_eq!(values["B2"], 3.0);
+}
+
+#[test]
+fn filter_bad_include_shape_is_value() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("B1", "1"),
+        ("B2", "0"),
+        ("C1", "=FILTER(A1:A3, B1:B2)"),
+    ];
+    assert_eq!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::Value)
+    );
+}
+
+#[test]
+fn if_unused_array_arm_does_not_create_false_cycle() {
+    // Const-false arm is pruned from refs and spill shape, so A1 does not spill
+    // into A2 and B1→A1 is not required (A2 stays blank → 0).
+    let cells = [("A1", "=IF(1, B1, SEQUENCE(2))"), ("B1", "=A2+5")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 5.0);
+    assert_eq!(values["A1"], 5.0);
+    assert!(!values.contains_key("A2"));
+}
+
+#[test]
+fn if_taken_array_arm_spill_is_readable_by_dependents() {
+    let cells = [
+        ("A1", "=IF(1, SEQUENCE(3), 0)"),
+        ("B1", "=A2"),
+        ("C1", "=SUM(A1:A3)"),
+        ("D1", "=IFERROR(SEQUENCE(2), 0)"),
+        ("E1", "=D2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["A3"], 3.0);
+    assert_eq!(values["B1"], 2.0);
+    assert_eq!(values["C1"], 6.0);
+    assert_eq!(values["D1"], 1.0);
+    assert_eq!(values["D2"], 2.0);
+    assert_eq!(values["E1"], 2.0);
+}
+
+#[test]
+fn if_taken_spill_with_unused_arm_ref_still_spills() {
+    // Complementary pattern: taken SEQUENCE arm must spill; unused B1 ref is pruned.
+    let cells = [("A1", "=IF(1, SEQUENCE(2), B1)"), ("B1", "=A2")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn if_const_cell_condition_prunes_unused_arm() {
+    let cells = [
+        ("C1", "1"),
+        ("A1", "=IF(C1, SEQUENCE(2), B1)"),
+        ("B1", "=A2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn if_unused_scalar_arm_ref_does_not_create_false_cycle() {
+    let cells = [("A1", "=IF(1, 5, B1)"), ("B1", "=A1")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 5.0);
+    assert_eq!(values["B1"], 5.0);
+}
+
+#[test]
+fn sequence_size_from_const_cell_registers_spill_deps() {
+    let cells = [
+        ("N1", "3"),
+        ("A1", "=SEQUENCE(N1)"),
+        ("B1", "=SUM(A1:A3)"),
+        ("C1", "=A2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["A3"], 3.0);
+    assert_eq!(values["B1"], 6.0);
+    assert_eq!(values["C1"], 2.0);
+}
+
+#[test]
+fn sequence_size_from_binop_registers_spill_deps() {
+    let cells = [("A1", "=SEQUENCE(1+2)"), ("B1", "=A2"), ("C1", "=SUM(A1:A3)")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["A3"], 3.0);
+    assert_eq!(values["B1"], 2.0);
+    assert_eq!(values["C1"], 6.0);
+}
+
+#[test]
+fn sequence_size_from_blank_plus_const_registers_spill_deps() {
+    let cells = [("A1", "=SEQUENCE(Z1+2)"), ("B1", "=A2")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn if_binop_condition_prunes_unused_arm() {
+    let cells = [("A1", "=IF(1+0, SEQUENCE(2), B1)"), ("B1", "=A2")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn iferror_known_primary_spill_is_readable() {
+    let cells = [("A1", "=IFERROR(SEQUENCE(2), B1)"), ("B1", "=A2")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn sequence_size_from_sum_registers_spill_deps() {
+    let cells = [
+        ("N1", "3"),
+        ("A1", "=SEQUENCE(SUM(N1))"),
+        ("B1", "=A2"),
+        ("C1", "=SUM(A1:A3)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["A3"], 3.0);
+    assert_eq!(values["B1"], 2.0);
+    assert_eq!(values["C1"], 6.0);
+}
+
+#[test]
+fn if_and_condition_prunes_unused_arm() {
+    let cells = [("A1", "=IF(AND(1, 1), SEQUENCE(2), B1)"), ("B1", "=A2")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn if_sum_cell_condition_prunes_unused_arm() {
+    let cells = [
+        ("F1", "1"),
+        ("E1", "=SUM(F1)"),
+        ("A1", "=IF(E1, SEQUENCE(2), B1)"),
+        ("B1", "=A2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn filter_if_empty_ref_does_not_create_false_cycle() {
+    // if_empty is lazy; collecting C1 would cycle with B1's spill into B2.
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("B1", "=FILTER(A1:A3, A1:A3>0, C1)"),
+        ("C1", "=B2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+    assert_eq!(values["C1"], 2.0);
+}
+
+#[test]
+fn product_skips_blanks_in_const_fold_for_if_spill() {
+    // Blank A2 must not make PRODUCT fold to 0 and prune the SEQUENCE arm.
+    let cells = [
+        ("A1", "2"),
+        ("A3", "3"),
+        ("X1", "=IF(PRODUCT(A1:A3), SEQUENCE(2), Y1)"),
+        ("Y1", "=X2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["X1"], 1.0);
+    assert_eq!(values["X2"], 2.0);
+    assert_eq!(values["Y1"], 2.0);
+}
+
+#[test]
+fn sequence_size_from_count_registers_spill_deps() {
+    let cells = [
+        ("N1", "1"),
+        ("N2", "2"),
+        ("N3", "3"),
+        ("A1", "=SEQUENCE(COUNT(N1:N3))"),
+        ("B1", "=A2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["A3"], 3.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn filter_provably_empty_uses_if_empty_spill() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("B1", "=FILTER(A1:A2, A1:A2>10, SEQUENCE(3))"),
+        ("C1", "=B2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+    assert_eq!(values["C1"], 2.0);
+}
+
+#[test]
+fn filter_unknown_empty_large_if_empty_spill_readable() {
+    // ROUND is not const-folded → include emptiness is unknown statically.
+    // Runtime empty + large if_empty SEQUENCE must still feed distant readers.
+    let cells = [
+        ("K1", "=ROUND(99.6, 0)"),
+        ("A1", "1"),
+        ("A2", "2"),
+        ("B1", "=FILTER(A1:A2, A1:A2>K1, SEQUENCE(5))"),
+        ("C1", "=B5"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["K1"], 100.0);
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B5"], 5.0);
+    assert_eq!(values["C1"], 5.0);
+}
+
+#[test]
+fn filter_unknown_if_empty_self_spill_no_false_cycle() {
+    // ROUND keeps include non-foldable; non-empty path with if_empty → self-spill reader.
+    let cells = [
+        ("K1", "=ROUND(0.4, 0)"),
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("B1", "=FILTER(A1:A3, A1:A3>K1, C1)"),
+        ("C1", "=B2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["K1"], 0.0);
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+    assert_eq!(values["C1"], 2.0);
+}
+
+#[test]
+fn filter_soft_skip_updates_transitive_dependents() {
+    // Include range references C1=B2 → spill edge would cycle; soft-skip + fixup must
+    // refresh C1 and E1=C1*2 (not only the soft-watched reader).
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("A4", "4"),
+        ("A5", "5"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        ("C3", "1"),
+        ("C4", "1"),
+        ("C5", "1"),
+        ("B1", "=FILTER(A1:A5, C1:C5)"),
+        ("E1", "=C1*2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+    assert_eq!(values["B4"], 4.0);
+    assert_eq!(values["B5"], 5.0);
+    assert_eq!(values["C1"], 2.0);
+    assert_eq!(values["E1"], 4.0);
+}
+
+#[test]
+fn iferror_filter_soft_skip_include_self_spill() {
+    // Wrapped FILTER must soft-skip the same include↔spill cycle as bare FILTER.
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("A4", "4"),
+        ("A5", "5"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        ("C3", "1"),
+        ("C4", "1"),
+        ("C5", "1"),
+        ("B1", "=IFERROR(FILTER(A1:A5, C1:C5), 0)"),
+        ("E1", "=C1*2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B5"], 5.0);
+    assert_eq!(values["C1"], 2.0);
+    assert_eq!(values["E1"], 4.0);
+}
+
+#[test]
+fn nested_iferror_filter_soft_skip() {
+    // First pass keeps rows 2–3 (C1 blank→0); fixup then includes row 1 once C1=B2.
+    let cells = [
+        ("A1", "10"),
+        ("A2", "20"),
+        ("A3", "30"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        ("C3", "1"),
+        ("B1", "=IFERROR(IFERROR(FILTER(A1:A3, C1:C3), -1), -2)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 10.0);
+    assert_eq!(values["B2"], 20.0);
+    assert_eq!(values["B3"], 30.0);
+    assert_eq!(values["C1"], 20.0);
+}
+
+#[test]
+fn if_wrapped_filter_soft_skip() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        ("C3", "1"),
+        ("B1", "=IF(1, FILTER(A1:A3, C1:C3), 0)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+    assert_eq!(values["C1"], 2.0);
+}
+
+#[test]
+fn iferror_sequence_spill_cycle_still_circular() {
+    // Soft-skip is FILTER-only; SEQUENCE under IFERROR/IF stays fail-closed.
+    let cells = [
+        ("B1", "=IFERROR(IF(C1, SEQUENCE(2), SEQUENCE(2)), 0)"),
+        ("C1", "=B2"),
+    ];
+    assert!(matches!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::CircularReference(_))
+    ));
+}
+
+#[test]
+fn dead_filter_arm_does_not_soft_skip_sequence_cycle() {
+    // Const-false IF: FILTER is dead; live SEQUENCE arm still refs C1 → fail-closed CR.
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        (
+            "B1",
+            "=IF(0, FILTER(A1:A2, C1:C2), IF(C1, SEQUENCE(2), SEQUENCE(2)))",
+        ),
+    ];
+    assert!(matches!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::CircularReference(_))
+    ));
+}
+
+#[test]
+fn iferror_fallback_filter_ignored_when_primary_spills() {
+    // Primary spills SEQUENCE and refs C1; fallback FILTER must not enable soft-skip.
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        (
+            "B1",
+            "=IFERROR(IF(C1, SEQUENCE(2), SEQUENCE(2)), FILTER(A1:A2, C1:C2))",
+        ),
+    ];
+    assert!(matches!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::CircularReference(_))
+    ));
+}
+
+#[test]
+fn filter_soft_skip_long_dependent_chain() {
+    // Fixup pass bound scales with wave size; a long explicit chain must still refresh.
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("A4", "4"),
+        ("A5", "5"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        ("C3", "1"),
+        ("C4", "1"),
+        ("C5", "1"),
+        ("B1", "=FILTER(A1:A5, C1:C5)"),
+        ("D1", "=C1"),
+        ("D2", "=D1"),
+        ("D3", "=D2"),
+        ("D4", "=D3"),
+        ("D5", "=D4"),
+        ("D6", "=D5*2"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["C1"], 2.0);
+    assert_eq!(values["D6"], 4.0);
+}
+
+#[test]
+fn spill_into_occupied_does_not_partial_write_anchor() {
+    // #SPILL! must not leave a half-applied footprint (validate-before-write).
+    let cells = [("A1", "=SEQUENCE(3)"), ("A3", "9")];
+    assert!(matches!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::Spill)
+    ));
+}
+
+#[test]
+fn let_binds_locals_and_spills() {
+    let cells = [("A1", "=LET(n, 3, SEQUENCE(n))"), ("B1", "=A2")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["A3"], 3.0);
+    assert_eq!(values["B1"], 2.0);
+}
+
+#[test]
+fn let_wrapped_filter_soft_skip() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("A3", "3"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        ("C3", "1"),
+        ("B1", "=LET(data, A1:A3, FILTER(data, C1:C3))"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+    assert_eq!(values["B3"], 3.0);
+    assert_eq!(values["C1"], 2.0);
+}
+
+#[test]
+fn let_nested_in_iferror_filter_soft_skip() {
+    let cells = [
+        ("A1", "10"),
+        ("A2", "20"),
+        ("A3", "30"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        ("C3", "1"),
+        (
+            "B1",
+            "=IFERROR(LET(src, A1:A3, FILTER(src, C1:C3)), -1)",
+        ),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 10.0);
+    assert_eq!(values["B2"], 20.0);
+    assert_eq!(values["B3"], 30.0);
+    assert_eq!(values["C1"], 20.0);
+}
+
+#[test]
+fn filter_inside_binop_does_not_soft_skip() {
+    // Soft-skip is only when FILTER is the formula root (or passthrough wrapper).
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("C1", "=B2"),
+        ("C2", "1"),
+        ("B1", "=SEQUENCE(2)+FILTER(A1:A2, C1:C2)"),
+    ];
+    assert!(matches!(
+        calculate_spreadsheet(&cells),
+        Err(SpreadsheetError::CircularReference(_))
+    ));
+}
+
+#[test]
+fn let_binding_name_does_not_create_false_cycle_with_spill_reader() {
+    // Local name Z1 must not be treated as a sheet ref to Z1=Y2.
+    let cells = [("Z1", "=Y2"), ("Y1", "=LET(Z1, 2, SEQUENCE(Z1))")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["Y1"], 1.0);
+    assert_eq!(values["Y2"], 2.0);
+    assert_eq!(values["Z1"], 2.0);
+}
+
+#[test]
+fn let_later_value_uses_earlier_binding_not_sheet_cell() {
+    let cells = [
+        ("X1", "100"),
+        ("A1", "=LET(x, 3, y, x+1, SEQUENCE(y))"),
+        ("B1", "=A3"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["A3"], 3.0);
+    assert_eq!(values["A4"], 4.0);
+    assert_eq!(values["B1"], 3.0);
+}
+
+#[test]
+fn let_bound_name_does_not_inflate_analyze_work() {
+    // Binding token `n` in the calculation must not add work (parallel threshold).
+    let with_let = crate::ast::analyze_formula_refs("=LET(n, A1, SEQUENCE(n)+A2)").unwrap();
+    let equivalent = crate::ast::analyze_formula_refs("=SEQUENCE(A1)+A2").unwrap();
+    assert_eq!(with_let.work, equivalent.work);
+    assert_eq!(with_let.cells, equivalent.cells);
+}
+
+
+#[test]
+fn filter_shrink_with_distant_reader_no_false_cycle() {
+    // Non-foldable include (MOD) so footprint stays array-sized; distant blank is 0.
+    let cells = [
+        ("A1", "1"),
+        ("A2", "0"),
+        ("A3", "0"),
+        ("A4", "0"),
+        ("A5", "0"),
+        ("T1", "=MOD(1, 2)"),
+        ("M1", "=T1"),
+        ("M2", "0"),
+        ("M3", "0"),
+        ("M4", "0"),
+        ("M5", "0"),
+        ("B1", "=FILTER(A1:A5, M1:M5)"),
+        ("C1", "=B1"),
+        ("D1", "=B5+0"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["C1"], 1.0);
+    assert_eq!(values["D1"], 0.0); // shrunk result does not write B5
+}
+
+#[test]
+fn blank_cells_in_ranges_are_zero_or_skipped() {
+    let cells = [
+        ("A1", "10"),
+        ("A3", "30"),
+        ("B1", "=SUM(A1:A3)"),
+        ("B2", "=A1:A3"),
+        ("C1", "=A2+1"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 40.0); // blank A2 skipped in SUM
+    assert_eq!(values["B2"], 10.0);
+    assert_eq!(values["B3"], 0.0); // blank as 0 in array arithmetic/spill
+    assert_eq!(values["B4"], 30.0);
+    assert_eq!(values["C1"], 1.0); // blank A2 → 0
+}
+
+#[test]
+fn cell_refs_are_case_insensitive() {
+    let cells = [("A1", "=SEQUENCE(2)"), ("B1", "=a2"), ("c1", "=A1")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["A1"], 1.0);
+    assert_eq!(values["A2"], 2.0);
+    assert_eq!(values["B1"], 2.0);
+    assert_eq!(values["C1"], 1.0);
+}
+
+#[test]
+fn filter_if_empty_is_lazy() {
+    let cells = [
+        ("A1", "1"),
+        ("A2", "2"),
+        ("B1", "=FILTER(A1:A2, A1:A2>0, 1/0)"),
+    ];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 1.0);
+    assert_eq!(values["B2"], 2.0);
+}
+
+#[test]
+fn min_max_of_all_blanks_are_zero() {
+    let cells = [("B1", "=MIN(A1:A3)"), ("B2", "=MAX(A1:A3)")];
+    let values = calculate_spreadsheet(&cells).unwrap();
+    assert_eq!(values["B1"], 0.0);
+    assert_eq!(values["B2"], 0.0);
 }

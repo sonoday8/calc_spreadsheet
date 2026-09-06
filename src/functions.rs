@@ -20,18 +20,6 @@ fn require_args(args: &[f64], expected: usize, expression: &str) -> Result<(), S
     }
 }
 
-fn require_args_at_least(
-    args: &[f64],
-    expected: usize,
-    expression: &str,
-) -> Result<(), SpreadsheetError> {
-    if args.len() >= expected {
-        Ok(())
-    } else {
-        Err(SpreadsheetError::InvalidFormula(expression.to_string()))
-    }
-}
-
 fn excel_mod(number: f64, divisor: f64) -> Result<f64, SpreadsheetError> {
     if divisor == 0.0 {
         return Err(SpreadsheetError::DivisionByZero);
@@ -100,12 +88,18 @@ pub(crate) fn eval_eager_function(
             Ok(args.iter().sum::<f64>() / args.len() as f64)
         }
         "MIN" => {
-            require_args_at_least(args, 1, expression)?;
-            Ok(args.iter().copied().fold(f64::INFINITY, f64::min))
+            if args.is_empty() {
+                Ok(0.0)
+            } else {
+                Ok(args.iter().copied().fold(f64::INFINITY, f64::min))
+            }
         }
         "MAX" => {
-            require_args_at_least(args, 1, expression)?;
-            Ok(args.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+            if args.is_empty() {
+                Ok(0.0)
+            } else {
+                Ok(args.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+            }
         }
         "PRODUCT" => {
             if args.is_empty() {
@@ -125,7 +119,7 @@ pub(crate) fn eval_eager_function(
         "SQRT" => {
             require_args(args, 1, expression)?;
             if args[0] < 0.0 {
-                return Err(SpreadsheetError::InvalidFormula(expression.to_string()));
+                return Err(SpreadsheetError::Num);
             }
             Ok(args[0].sqrt())
         }

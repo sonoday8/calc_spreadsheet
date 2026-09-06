@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::{eval_expr, Expr};
+use crate::ast::{eval_value, Expr, EvalValue};
 use crate::error::SpreadsheetError;
 use crate::parser::parse_standalone_string_literal;
 
@@ -18,35 +18,66 @@ pub(crate) struct EvalContext<'a> {
     pub sources: &'a HashMap<String, String>,
     pub cache: &'a HashMap<String, f64>,
     pub text_cells: &'a HashMap<String, String>,
+    /// Cell currently being evaluated (for `@` implicit intersection).
+    pub eval_cell: &'a str,
+    /// Spill footprints written by earlier layers: anchor → (height, width).
+    pub spill_meta: &'a HashMap<String, (usize, usize)>,
+    /// `LET` name bindings for the active evaluation scope.
+    pub bindings: Option<&'a HashMap<String, EvalValue>>,
 }
 
 impl<'a> EvalContext<'a> {
+    pub(crate) fn lookup_binding(&self, name: &str) -> Option<&'a EvalValue> {
+        self.bindings.and_then(|b| b.get(name))
+    }
+
     pub(crate) fn lookup_number(&self, cell_name: &str) -> Result<f64, SpreadsheetError> {
+        if let Some(value) = self.lookup_binding(cell_name) {
+            return match value {
+                EvalValue::Number(n) => Ok(*n),
+                EvalValue::Array(rows) => rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .copied()
+                    .ok_or(SpreadsheetError::Value),
+            };
+        }
         if let Some(value) = self.cache.get(cell_name) {
             return Ok(*value);
         }
         if self.text_cells.contains_key(cell_name) {
             return Err(SpreadsheetError::Value);
         }
-        Err(SpreadsheetError::UnknownCell(cell_name.to_string()))
+        // Excel: blank / missing cells coerce to 0 in numeric contexts.
+        Ok(0.0)
     }
 
-    /// Aggregate functions (SUM/AVERAGE/…) skip text cells like Excel.
+    /// Aggregate functions (SUM/AVERAGE/…) skip text and blanks like Excel.
     /// Returns `Ok(None)` to omit the value from the argument list.
     pub(crate) fn lookup_aggregate_number(
         &self,
         cell_name: &str,
     ) -> Result<Option<f64>, SpreadsheetError> {
+        if let Some(value) = self.lookup_binding(cell_name) {
+            return match value {
+                EvalValue::Number(n) => Ok(Some(*n)),
+                EvalValue::Array(_) => Ok(None),
+            };
+        }
         if let Some(value) = self.cache.get(cell_name) {
             return Ok(Some(*value));
         }
         if self.text_cells.contains_key(cell_name) {
             return Ok(None);
         }
-        Err(SpreadsheetError::UnknownCell(cell_name.to_string()))
+        // Blank / missing: omit from SUM/AVERAGE/… (same as Excel).
+        Ok(None)
     }
 
     pub(crate) fn count_cell_kind(&self, cell_name: &str) -> CellKind {
+        if self.lookup_binding(cell_name).is_some() {
+            return CellKind::Number;
+        }
         if self.cache.contains_key(cell_name) {
             CellKind::Number
         } else if self.text_cells.contains_key(cell_name) {
@@ -67,7 +98,7 @@ impl<'a> EvalContext<'a> {
 pub(crate) fn evaluate_formula(
     ctx: &EvalContext<'_>,
     cell_name: &str,
-) -> Result<f64, SpreadsheetError> {
+) -> Result<EvalValue, SpreadsheetError> {
     let expr = ctx
         .asts
         .get(cell_name)
@@ -77,7 +108,7 @@ pub(crate) fn evaluate_formula(
         .get(cell_name)
         .map(|s| s.as_str())
         .unwrap_or(cell_name);
-    eval_expr(expr, ctx, source)
+    eval_value(expr, ctx, source)
 }
 
 pub(crate) fn is_pure_string_expression(expression: &str) -> bool {

@@ -10,6 +10,10 @@ pub enum SpreadsheetError {
     Num,
     /// Excel `#VALUE!`
     Value,
+    /// Excel `#SPILL!` — array result blocked by a non-empty cell
+    Spill,
+    /// Excel `#CALC!` — e.g. FILTER with no matching rows
+    Calc,
 }
 
 impl fmt::Display for SpreadsheetError {
@@ -27,6 +31,8 @@ impl fmt::Display for SpreadsheetError {
             SpreadsheetError::DivisionByZero => write!(f, "division by zero"),
             SpreadsheetError::Num => write!(f, "#NUM!"),
             SpreadsheetError::Value => write!(f, "#VALUE!"),
+            SpreadsheetError::Spill => write!(f, "#SPILL!"),
+            SpreadsheetError::Calc => write!(f, "#CALC!"),
         }
     }
 }

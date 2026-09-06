@@ -24,16 +24,6 @@ pub(crate) fn a1_range_size(start: &str, end: &str) -> Result<usize, Spreadsheet
     Ok(size)
 }
 
-pub(crate) fn expand_a1_range(start: &str, end: &str) -> Result<Vec<String>, SpreadsheetError> {
-    let size = a1_range_size(start, end)?;
-    let mut cells = Vec::with_capacity(size);
-    for_each_a1_range(start, end, |name| {
-        cells.push(name);
-        Ok(())
-    })?;
-    Ok(cells)
-}
-
 /// Visit each cell in an A1 range without allocating the full name list.
 pub(crate) fn for_each_a1_range(
     start: &str,
@@ -107,6 +97,15 @@ pub(crate) fn format_a1(col: u32, row: u32) -> String {
     out
 }
 
+/// Canonical A1 spelling (uppercase letters). Non-A1 names are returned unchanged.
+pub(crate) fn canonical_cell_name(name: &str) -> String {
+    if let Some((col, row)) = parse_a1(name) {
+        format_a1(col, row)
+    } else {
+        name.to_string()
+    }
+}
+
 pub(crate) fn is_cell_name_start(ch: char) -> bool {
     ch.is_ascii_alphabetic() || ch == '_'
 }
@@ -142,7 +141,7 @@ mod tests {
 
     #[test]
     fn rejects_oversized_ranges() {
-        let err = expand_a1_range("A1", "ZZ9000").unwrap_err();
+        let err = a1_range_size("A1", "ZZ9000").unwrap_err();
         assert_eq!(err, SpreadsheetError::Num);
     }
 }
