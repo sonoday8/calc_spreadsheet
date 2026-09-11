@@ -5,10 +5,11 @@ use crate::error::SpreadsheetError;
 use crate::functions::is_truthy;
 use crate::refs::MAX_RANGE_CELLS;
 
-pub(crate) fn value_to_matrix(value: EvalValue) -> Vec<Vec<f64>> {
+pub(crate) fn value_to_matrix(value: EvalValue) -> Result<Vec<Vec<f64>>, SpreadsheetError> {
     match value {
-        EvalValue::Number(n) => vec![vec![n]],
-        EvalValue::Array(rows) => rows,
+        EvalValue::Number(n) => Ok(vec![vec![n]]),
+        EvalValue::Array(rows) => Ok(rows),
+        EvalValue::Text(_) => Err(SpreadsheetError::Value),
     }
 }
 
@@ -72,7 +73,7 @@ pub(crate) fn unique(
     by_col: bool,
     exactly_once: bool,
 ) -> Result<EvalValue, SpreadsheetError> {
-    let mut rows = value_to_matrix(array);
+    let mut rows = value_to_matrix(array)?;
     if by_col {
         rows = transpose(rows)?;
     }
@@ -117,7 +118,7 @@ pub(crate) fn sort(
     sort_order: f64,
     by_col: bool,
 ) -> Result<EvalValue, SpreadsheetError> {
-    let mut rows = value_to_matrix(array);
+    let mut rows = value_to_matrix(array)?;
     if rows.is_empty() {
         return Err(SpreadsheetError::Calc);
     }
@@ -172,8 +173,8 @@ pub(crate) fn filter(
     include: EvalValue,
     if_empty: Option<EvalValue>,
 ) -> Result<EvalValue, SpreadsheetError> {
-    let array = value_to_matrix(array);
-    let include = value_to_matrix(include);
+    let array = value_to_matrix(array)?;
+    let include = value_to_matrix(include)?;
     let height = array.len();
     let width = array[0].len();
     let ih = include.len();
@@ -273,7 +274,7 @@ mod tests {
     fn sequence_fills_row_major() {
         let v = sequence(2.0, 3.0, 1.0, 1.0).unwrap();
         assert_eq!(
-            value_to_matrix(v),
+            value_to_matrix(v).unwrap(),
             vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]
         );
     }
@@ -283,6 +284,6 @@ mod tests {
         let array = EvalValue::Array(vec![vec![10.0], vec![20.0], vec![30.0]]);
         let include = EvalValue::Array(vec![vec![1.0], vec![0.0], vec![1.0]]);
         let v = filter(array, include, None).unwrap();
-        assert_eq!(value_to_matrix(v), vec![vec![10.0], vec![30.0]]);
+        assert_eq!(value_to_matrix(v).unwrap(), vec![vec![10.0], vec![30.0]]);
     }
 }

@@ -10,7 +10,7 @@ fn evaluates_values_and_formulas_recursively() {
         ("C1", "=(B2 - A1) / 5"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
 
     assert_eq!(values["A1"], 10.0);
     assert_eq!(values["A2"], 20.0);
@@ -24,7 +24,7 @@ fn detects_circular_references() {
     let cells = [("A1", "=B1"), ("B1", "=A1")];
 
     assert!(matches!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::CircularReference(_))
     ));
 }
@@ -41,7 +41,7 @@ fn supports_sum_function() {
         ("B4", "=IF(1, SUM(A1:A2), 0)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 60.0);
     assert_eq!(values["B2"], 15.0);
     assert_eq!(values["B3"], 60.0);
@@ -51,7 +51,7 @@ fn supports_sum_function() {
 #[test]
 fn multi_cell_range_spills_into_empty_cells() {
     let cells = [("A1", "1"), ("A2", "2"), ("B1", "=A1:A2")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
 }
@@ -69,7 +69,7 @@ fn element_wise_product_sum() {
         ("D1", "=A1:A3*B1:B3"),
         ("E1", "=SUM(A1:A3*2)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["C1"], 200.0);
     assert_eq!(values["D1"], 20.0);
     assert_eq!(values["D2"], 60.0);
@@ -88,7 +88,7 @@ fn element_wise_shape_mismatch_is_value() {
         ("C1", "=SUM(A1:A2*B1:B3)"),
     ];
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Value)
     );
 }
@@ -102,7 +102,7 @@ fn spill_blocked_by_occupied_cell() {
         ("B2", "99"),
     ];
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Spill)
     );
 }
@@ -117,7 +117,7 @@ fn spilled_values_are_readable_by_other_formulas() {
         ("C1", "=SUM(B1:B3)"),
         ("C2", "=B2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B3"], 3.0);
@@ -132,7 +132,7 @@ fn if_can_spill_array_branch() {
         ("A2", "20"),
         ("B1", "=IF(1, A1:A2, 0)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 10.0);
     assert_eq!(values["B2"], 20.0);
 }
@@ -140,7 +140,7 @@ fn if_can_spill_array_branch() {
 #[test]
 fn sequence_spills_grid() {
     let cells = [("A1", "=SEQUENCE(2, 3, 1, 1)")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["B1"], 2.0);
     assert_eq!(values["C1"], 3.0);
@@ -161,7 +161,7 @@ fn unique_sort_filter_pipeline() {
         ("D1", "=FILTER(A1:A4, A1:A4>2)"),
         ("E1", "=FILTER(A1:A4, A1:A4>10, 0)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     // UNIQUE keeps first occurrence: 3, 1, 2
     assert_eq!(values["B1"], 3.0);
     assert_eq!(values["B2"], 1.0);
@@ -186,7 +186,7 @@ fn filter_empty_without_fallback_is_calc() {
         ("B1", "=FILTER(A1:A2, A1:A2>10)"),
     ];
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Calc)
     );
 }
@@ -202,7 +202,7 @@ fn sort_descending_by_column() {
         ("B3", "3"),
         ("D1", "=SORT(A1:B3, 1, -1)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["D1"], 30.0);
     assert_eq!(values["E1"], 2.0);
     assert_eq!(values["D2"], 20.0);
@@ -218,7 +218,7 @@ fn spill_ref_operator_copies_spill() {
         ("B1", "=A1#"),
         ("C1", "=SUM(A1#)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["A3"], 3.0);
@@ -240,7 +240,7 @@ fn implicit_intersection_at_operator() {
         ("C2", "=@A1:A3"),
         ("D1", "=@B1:B3"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["C2"], 20.0); // same row as C2 → A2
     assert_eq!(values["D1"], 1.0); // same row as D1 → B1
 }
@@ -256,7 +256,7 @@ fn broadcast_row_times_column() {
         ("D3", "30"),
         ("E1", "=A1:C1*D1:D3"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["E1"], 10.0);
     assert_eq!(values["F1"], 20.0);
     assert_eq!(values["G1"], 30.0);
@@ -271,7 +271,7 @@ fn broadcast_row_times_column() {
 #[test]
 fn oversized_range_is_num() {
     let cells = [("Out", "=SUM(A1:ZZ9000)")];
-    assert_eq!(calculate_spreadsheet(&cells), Err(SpreadsheetError::Num));
+    assert_eq!(calculate_spreadsheet(&cells, CalculateOptions::default()), Err(SpreadsheetError::Num));
 }
 
 #[test]
@@ -283,7 +283,7 @@ fn sum_skips_text_cells_like_excel() {
         ("B1", "=SUM(A1:A3)"),
         ("B2", "=SUM(A1, \"x\", A3)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 40.0);
     assert_eq!(values["B2"], 40.0);
 }
@@ -296,7 +296,7 @@ fn supports_if_function() {
         ("B2", "=IF(A1 < 5, 1, 0)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 0.0);
 }
@@ -309,7 +309,7 @@ fn if_short_circuits_unused_branch() {
         ("B2", "=IF(1, 7, 1 / 0)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 42.0);
     assert_eq!(values["B2"], 7.0);
 }
@@ -328,7 +328,7 @@ fn supports_aggregate_functions() {
         ("B6", "=PRODUCT(A1, A2, A3)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 20.0);
     assert_eq!(values["B2"], 10.0);
     assert_eq!(values["B3"], 30.0);
@@ -348,7 +348,7 @@ fn count_skips_text_counta_includes_text() {
         ("B3", "=COUNT(A1, \"x\", A3)"),
         ("B4", "=COUNTA(A1, \"x\", A3)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 2.0);
     assert_eq!(values["B2"], 3.0);
     assert_eq!(values["B3"], 2.0);
@@ -372,7 +372,7 @@ fn supports_math_functions() {
         ("B9", "=ROUND(-2.5)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 3.7);
     assert_eq!(values["B2"], -4.0);
     assert_eq!(values["B3"], 4.0);
@@ -397,7 +397,7 @@ fn supports_logical_functions() {
         ("B6", "=NOT(A1)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 0.0);
     assert_eq!(values["B3"], 1.0);
@@ -417,7 +417,7 @@ fn supports_ifs_switch_and_iferror() {
         ("B4", "=IFERROR(A1 / 5, -1)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 3.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B3"], -1.0);
@@ -429,7 +429,7 @@ fn average_without_args_is_division_by_zero() {
     let cells = [("A1", "=AVERAGE()")];
 
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::DivisionByZero)
     );
 }
@@ -438,7 +438,7 @@ fn average_without_args_is_division_by_zero() {
 fn sqrt_rejects_negative_values() {
     let cells = [("A1", "=SQRT(-1)")];
 
-    assert_eq!(calculate_spreadsheet(&cells), Err(SpreadsheetError::Num));
+    assert_eq!(calculate_spreadsheet(&cells, CalculateOptions::default()), Err(SpreadsheetError::Num));
 }
 
 #[test]
@@ -455,7 +455,7 @@ fn supports_excel_date_parts_and_days() {
         ("B6", "=DATEVALUE(\"2008/1/1\")"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 39448.0);
     assert_eq!(values["B1"], 2008.0);
     assert_eq!(values["B2"], 1.0);
@@ -480,7 +480,7 @@ fn supports_datedif_like_excel() {
         ("B6", "=DATEDIF(\"2001/1/1\", \"2003/1/1\", \"Y\")"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 2.0);
     assert_eq!(values["B2"], 440.0);
     assert_eq!(values["B3"], 75.0);
@@ -494,7 +494,7 @@ fn datedif_rejects_reversed_dates() {
     let cells = [("A1", "=DATEDIF(DATE(2020, 1, 2), DATE(2020, 1, 1), \"D\")")];
 
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Num)
     );
 }
@@ -510,7 +510,7 @@ fn date_supports_month_and_day_rollover() {
         ("A6", "=DAY(A2)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A3"], 2025.0);
     assert_eq!(values["A4"], 1.0);
     assert_eq!(values["A5"], 2.0);
@@ -521,12 +521,12 @@ fn date_supports_month_and_day_rollover() {
 fn datevalue_rejects_invalid_dates_but_date_can_rollover() {
     let invalid = [("A1", "=DATEVALUE(\"2024-01-32\")")];
     assert_eq!(
-        calculate_spreadsheet(&invalid),
+        calculate_spreadsheet(&invalid, CalculateOptions::default()),
         Err(SpreadsheetError::Value)
     );
 
     let rolled = [("A1", "=DATE(2024, 1, 32)"), ("A2", "=DAY(A1)")];
-    let values = calculate_spreadsheet(&rolled).unwrap();
+    let values = calculate_spreadsheet(&rolled, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A2"], 1.0);
 }
 
@@ -540,7 +540,7 @@ fn days_can_be_negative_and_ignores_time_fraction() {
         ("B3", "=DAY(39448.75)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], -42.0);
     assert_eq!(values["B2"], 2008.0);
     assert_eq!(values["B3"], 1.0);
@@ -556,7 +556,7 @@ fn datedif_supports_md_and_unit_cell_reference() {
         ("B2", "=DATEDIF(DATE(2001, 1, 1), DATE(2003, 1, 1), U1)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["U1"], CellValue::Text("Y".to_string()));
     assert_eq!(values["B1"], 30.0);
     assert_eq!(values["B2"], 2.0);
@@ -571,7 +571,7 @@ fn supports_excel_style_comparison_operators() {
         ("B3", "=IF(A1 == 10, 1, 0)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 0.0);
     assert_eq!(values["B3"], 1.0);
@@ -581,7 +581,7 @@ fn supports_excel_style_comparison_operators() {
 fn huge_date_serial_is_rejected_without_hanging() {
     let cells = [("A1", "=YEAR(1e308)")];
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Num)
     );
 }
@@ -597,7 +597,7 @@ fn datevalue_supports_japanese_and_dmy_in_formulas() {
         ("B3", "=YEAR(A3)"),
     ];
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 15.0);
     assert_eq!(values["B2"], 15.0);
     assert_eq!(values["B3"], 2024.0);
@@ -606,7 +606,7 @@ fn datevalue_supports_japanese_and_dmy_in_formulas() {
 #[test]
 fn datedif_md_can_be_negative_like_excel() {
     let cells = [("A1", "=DATEDIF(DATE(2007, 1, 31), DATE(2007, 3, 1), \"MD\")")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], -2.0);
 }
 
@@ -621,7 +621,7 @@ fn evaluates_many_independent_cells_in_parallel_path() {
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values.len(), 40);
     assert_eq!(values["C0"], 0.0);
     assert_eq!(values["C39"], 390.0);
@@ -638,7 +638,7 @@ fn parallel_path_respects_dependency_layers() {
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 3.0);
 }
 
@@ -658,7 +658,7 @@ fn unique_exactly_once_and_by_col() {
         ("E2", "20"),
         ("F1", "=UNIQUE(C1:E2, 1)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     // exactly_once: 1 and 2 (3 appears twice)
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
@@ -681,7 +681,7 @@ fn sort_by_col_reorders_columns() {
         ("C2", "20"),
         ("D1", "=SORT(A1:C2, 1, 1, 1)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     // Sort columns by row 1 ascending: 1, 2, 3
     assert_eq!(values["D1"], 1.0);
     assert_eq!(values["E1"], 2.0);
@@ -699,7 +699,7 @@ fn filter_columns_with_row_include() {
         ("C1", "3"),
         ("D1", "=FILTER(A1:C1, A1:C1>1)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["D1"], 2.0);
     assert_eq!(values["E1"], 3.0);
     assert!(!values.contains_key("F1"));
@@ -708,10 +708,10 @@ fn filter_columns_with_row_include() {
 #[test]
 fn sequence_zero_rows_is_calc_and_defaults_work() {
     assert_eq!(
-        calculate_spreadsheet(&[("A1", "=SEQUENCE(0)")]),
+        calculate_spreadsheet(&[("A1", "=SEQUENCE(0)")], CalculateOptions::default()),
         Err(SpreadsheetError::Calc)
     );
-    let values = calculate_spreadsheet(&[("B1", "=SEQUENCE(3)")]).unwrap();
+    let values = calculate_spreadsheet(&[("B1", "=SEQUENCE(3)")], CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B3"], 3.0);
@@ -726,7 +726,7 @@ fn implicit_intersection_out_of_range_is_value() {
         ("D5", "=@A1:A3"),
     ];
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Value)
     );
 }
@@ -737,7 +737,7 @@ fn implicit_intersection_on_spill_ref() {
         ("A1", "=SEQUENCE(3)"),
         ("B2", "=@A1#"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B2"], 2.0);
 }
 
@@ -749,7 +749,7 @@ fn two_spills_into_same_cell_is_spill_error() {
         ("B1", "=SEQUENCE(2)"),
     ];
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Spill)
     );
 }
@@ -757,7 +757,7 @@ fn two_spills_into_same_cell_is_spill_error() {
 #[test]
 fn non_a1_anchor_does_not_spill_geometrically() {
     let cells = [("Foo", "=SEQUENCE(3)")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["Foo"], 1.0);
     assert!(!values.contains_key("Foo2"));
     assert_eq!(values.len(), 1);
@@ -773,7 +773,7 @@ fn array_division_by_zero_is_error() {
         ("C1", "=A1:A2/B1:B2"),
     ];
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::DivisionByZero)
     );
 }
@@ -788,7 +788,7 @@ fn broadcast_column_times_row() {
         ("C1", "20"),
         ("D1", "=A1:A3*B1:C1"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["D1"], 10.0);
     assert_eq!(values["E1"], 20.0);
     assert_eq!(values["D2"], 20.0);
@@ -800,15 +800,15 @@ fn broadcast_column_times_row() {
 #[test]
 fn unknown_cell_and_invalid_formula_errors() {
     // Missing cells coerce to 0 (Excel-like); typos in function names still error.
-    let values = calculate_spreadsheet(&[("A1", "=Z99"), ("A2", "=Z99+1")]).unwrap();
+    let values = calculate_spreadsheet(&[("A1", "=Z99"), ("A2", "=Z99+1")], CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 0.0);
     assert_eq!(values["A2"], 1.0);
     assert!(matches!(
-        calculate_spreadsheet(&[("A1", "=((((")]),
+        calculate_spreadsheet(&[("A1", "=((((")], CalculateOptions::default()),
         Err(SpreadsheetError::InvalidFormula(_))
     ));
     assert!(matches!(
-        calculate_spreadsheet(&[("A1", "=NO_SUCH_FUNC(1)")]),
+        calculate_spreadsheet(&[("A1", "=NO_SUCH_FUNC(1)")], CalculateOptions::default()),
         Err(SpreadsheetError::InvalidFormula(_))
     ));
 }
@@ -820,7 +820,7 @@ fn iferror_can_spill_array_result() {
         ("A2", "20"),
         ("B1", "=IFERROR(A1:A2, 0)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 10.0);
     assert_eq!(values["B2"], 20.0);
 }
@@ -834,7 +834,7 @@ fn count_counts_elements_of_array_expression() {
         ("B1", "=COUNT(A1:A3*2)"),
         ("B2", "=COUNTA(A1:A3*2)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 3.0);
     assert_eq!(values["B2"], 3.0);
 }
@@ -850,7 +850,7 @@ fn filter_bad_include_shape_is_value() {
         ("C1", "=FILTER(A1:A3, B1:B2)"),
     ];
     assert_eq!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Value)
     );
 }
@@ -860,7 +860,7 @@ fn if_unused_array_arm_does_not_create_false_cycle() {
     // Const-false arm is pruned from refs and spill shape, so A1 does not spill
     // into A2 and B1→A1 is not required (A2 stays blank → 0).
     let cells = [("A1", "=IF(1, B1, SEQUENCE(2))"), ("B1", "=A2+5")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 5.0);
     assert_eq!(values["A1"], 5.0);
     assert!(!values.contains_key("A2"));
@@ -875,7 +875,7 @@ fn if_taken_array_arm_spill_is_readable_by_dependents() {
         ("D1", "=IFERROR(SEQUENCE(2), 0)"),
         ("E1", "=D2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["A3"], 3.0);
@@ -890,7 +890,7 @@ fn if_taken_array_arm_spill_is_readable_by_dependents() {
 fn if_taken_spill_with_unused_arm_ref_still_spills() {
     // Complementary pattern: taken SEQUENCE arm must spill; unused B1 ref is pruned.
     let cells = [("A1", "=IF(1, SEQUENCE(2), B1)"), ("B1", "=A2")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["B1"], 2.0);
@@ -903,7 +903,7 @@ fn if_const_cell_condition_prunes_unused_arm() {
         ("A1", "=IF(C1, SEQUENCE(2), B1)"),
         ("B1", "=A2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["B1"], 2.0);
@@ -912,7 +912,7 @@ fn if_const_cell_condition_prunes_unused_arm() {
 #[test]
 fn if_unused_scalar_arm_ref_does_not_create_false_cycle() {
     let cells = [("A1", "=IF(1, 5, B1)"), ("B1", "=A1")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 5.0);
     assert_eq!(values["B1"], 5.0);
 }
@@ -925,7 +925,7 @@ fn sequence_size_from_const_cell_registers_spill_deps() {
         ("B1", "=SUM(A1:A3)"),
         ("C1", "=A2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["A3"], 3.0);
@@ -936,7 +936,7 @@ fn sequence_size_from_const_cell_registers_spill_deps() {
 #[test]
 fn sequence_size_from_binop_registers_spill_deps() {
     let cells = [("A1", "=SEQUENCE(1+2)"), ("B1", "=A2"), ("C1", "=SUM(A1:A3)")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["A3"], 3.0);
@@ -947,7 +947,7 @@ fn sequence_size_from_binop_registers_spill_deps() {
 #[test]
 fn sequence_size_from_blank_plus_const_registers_spill_deps() {
     let cells = [("A1", "=SEQUENCE(Z1+2)"), ("B1", "=A2")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["B1"], 2.0);
@@ -956,7 +956,7 @@ fn sequence_size_from_blank_plus_const_registers_spill_deps() {
 #[test]
 fn if_binop_condition_prunes_unused_arm() {
     let cells = [("A1", "=IF(1+0, SEQUENCE(2), B1)"), ("B1", "=A2")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["B1"], 2.0);
@@ -965,7 +965,7 @@ fn if_binop_condition_prunes_unused_arm() {
 #[test]
 fn iferror_known_primary_spill_is_readable() {
     let cells = [("A1", "=IFERROR(SEQUENCE(2), B1)"), ("B1", "=A2")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["B1"], 2.0);
@@ -979,7 +979,7 @@ fn sequence_size_from_sum_registers_spill_deps() {
         ("B1", "=A2"),
         ("C1", "=SUM(A1:A3)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["A3"], 3.0);
@@ -990,7 +990,7 @@ fn sequence_size_from_sum_registers_spill_deps() {
 #[test]
 fn if_and_condition_prunes_unused_arm() {
     let cells = [("A1", "=IF(AND(1, 1), SEQUENCE(2), B1)"), ("B1", "=A2")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["B1"], 2.0);
@@ -1004,7 +1004,7 @@ fn if_sum_cell_condition_prunes_unused_arm() {
         ("A1", "=IF(E1, SEQUENCE(2), B1)"),
         ("B1", "=A2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["B1"], 2.0);
@@ -1020,7 +1020,7 @@ fn filter_if_empty_ref_does_not_create_false_cycle() {
         ("B1", "=FILTER(A1:A3, A1:A3>0, C1)"),
         ("C1", "=B2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B3"], 3.0);
@@ -1036,7 +1036,7 @@ fn product_skips_blanks_in_const_fold_for_if_spill() {
         ("X1", "=IF(PRODUCT(A1:A3), SEQUENCE(2), Y1)"),
         ("Y1", "=X2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["X1"], 1.0);
     assert_eq!(values["X2"], 2.0);
     assert_eq!(values["Y1"], 2.0);
@@ -1051,7 +1051,7 @@ fn sequence_size_from_count_registers_spill_deps() {
         ("A1", "=SEQUENCE(COUNT(N1:N3))"),
         ("B1", "=A2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["A3"], 3.0);
@@ -1066,7 +1066,7 @@ fn filter_provably_empty_uses_if_empty_spill() {
         ("B1", "=FILTER(A1:A2, A1:A2>10, SEQUENCE(3))"),
         ("C1", "=B2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B3"], 3.0);
@@ -1084,7 +1084,7 @@ fn filter_unknown_empty_large_if_empty_spill_readable() {
         ("B1", "=FILTER(A1:A2, A1:A2>K1, SEQUENCE(5))"),
         ("C1", "=B5"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["K1"], 100.0);
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B5"], 5.0);
@@ -1102,7 +1102,7 @@ fn filter_unknown_if_empty_self_spill_no_false_cycle() {
         ("B1", "=FILTER(A1:A3, A1:A3>K1, C1)"),
         ("C1", "=B2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["K1"], 0.0);
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
@@ -1128,7 +1128,7 @@ fn filter_soft_skip_updates_transitive_dependents() {
         ("B1", "=FILTER(A1:A5, C1:C5)"),
         ("E1", "=C1*2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B3"], 3.0);
@@ -1155,7 +1155,7 @@ fn iferror_filter_soft_skip_include_self_spill() {
         ("B1", "=IFERROR(FILTER(A1:A5, C1:C5), 0)"),
         ("E1", "=C1*2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B5"], 5.0);
@@ -1175,7 +1175,7 @@ fn nested_iferror_filter_soft_skip() {
         ("C3", "1"),
         ("B1", "=IFERROR(IFERROR(FILTER(A1:A3, C1:C3), -1), -2)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 10.0);
     assert_eq!(values["B2"], 20.0);
     assert_eq!(values["B3"], 30.0);
@@ -1193,7 +1193,7 @@ fn if_wrapped_filter_soft_skip() {
         ("C3", "1"),
         ("B1", "=IF(1, FILTER(A1:A3, C1:C3), 0)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B3"], 3.0);
@@ -1208,7 +1208,7 @@ fn iferror_sequence_spill_cycle_still_circular() {
         ("C1", "=B2"),
     ];
     assert!(matches!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::CircularReference(_))
     ));
 }
@@ -1227,7 +1227,7 @@ fn dead_filter_arm_does_not_soft_skip_sequence_cycle() {
         ),
     ];
     assert!(matches!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::CircularReference(_))
     ));
 }
@@ -1246,7 +1246,7 @@ fn iferror_fallback_filter_ignored_when_primary_spills() {
         ),
     ];
     assert!(matches!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::CircularReference(_))
     ));
 }
@@ -1273,7 +1273,7 @@ fn filter_soft_skip_long_dependent_chain() {
         ("D5", "=D4"),
         ("D6", "=D5*2"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["C1"], 2.0);
     assert_eq!(values["D6"], 4.0);
 }
@@ -1283,7 +1283,7 @@ fn spill_into_occupied_does_not_partial_write_anchor() {
     // #SPILL! must not leave a half-applied footprint (validate-before-write).
     let cells = [("A1", "=SEQUENCE(3)"), ("A3", "9")];
     assert!(matches!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::Spill)
     ));
 }
@@ -1291,7 +1291,7 @@ fn spill_into_occupied_does_not_partial_write_anchor() {
 #[test]
 fn let_binds_locals_and_spills() {
     let cells = [("A1", "=LET(n, 3, SEQUENCE(n))"), ("B1", "=A2")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["A3"], 3.0);
@@ -1309,7 +1309,7 @@ fn let_wrapped_filter_soft_skip() {
         ("C3", "1"),
         ("B1", "=LET(data, A1:A3, FILTER(data, C1:C3))"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
     assert_eq!(values["B3"], 3.0);
@@ -1330,7 +1330,7 @@ fn let_nested_in_iferror_filter_soft_skip() {
             "=IFERROR(LET(src, A1:A3, FILTER(src, C1:C3)), -1)",
         ),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 10.0);
     assert_eq!(values["B2"], 20.0);
     assert_eq!(values["B3"], 30.0);
@@ -1348,7 +1348,7 @@ fn filter_inside_binop_does_not_soft_skip() {
         ("B1", "=SEQUENCE(2)+FILTER(A1:A2, C1:C2)"),
     ];
     assert!(matches!(
-        calculate_spreadsheet(&cells),
+        calculate_spreadsheet(&cells, CalculateOptions::default()),
         Err(SpreadsheetError::CircularReference(_))
     ));
 }
@@ -1357,7 +1357,7 @@ fn filter_inside_binop_does_not_soft_skip() {
 fn let_binding_name_does_not_create_false_cycle_with_spill_reader() {
     // Local name Z1 must not be treated as a sheet ref to Z1=Y2.
     let cells = [("Z1", "=Y2"), ("Y1", "=LET(Z1, 2, SEQUENCE(Z1))")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["Y1"], 1.0);
     assert_eq!(values["Y2"], 2.0);
     assert_eq!(values["Z1"], 2.0);
@@ -1370,7 +1370,7 @@ fn let_later_value_uses_earlier_binding_not_sheet_cell() {
         ("A1", "=LET(x, 3, y, x+1, SEQUENCE(y))"),
         ("B1", "=A3"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["A3"], 3.0);
@@ -1407,7 +1407,7 @@ fn filter_shrink_with_distant_reader_no_false_cycle() {
         ("C1", "=B1"),
         ("D1", "=B5+0"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["C1"], 1.0);
     assert_eq!(values["D1"], 0.0); // shrunk result does not write B5
@@ -1422,7 +1422,7 @@ fn blank_cells_in_ranges_are_zero_or_skipped() {
         ("B2", "=A1:A3"),
         ("C1", "=A2+1"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 40.0); // blank A2 skipped in SUM
     assert_eq!(values["B2"], 10.0);
     assert_eq!(values["B3"], 0.0); // blank as 0 in array arithmetic/spill
@@ -1433,7 +1433,7 @@ fn blank_cells_in_ranges_are_zero_or_skipped() {
 #[test]
 fn cell_refs_are_case_insensitive() {
     let cells = [("A1", "=SEQUENCE(2)"), ("B1", "=a2"), ("c1", "=A1")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["A1"], 1.0);
     assert_eq!(values["A2"], 2.0);
     assert_eq!(values["B1"], 2.0);
@@ -1447,7 +1447,7 @@ fn filter_if_empty_is_lazy() {
         ("A2", "2"),
         ("B1", "=FILTER(A1:A2, A1:A2>0, 1/0)"),
     ];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 1.0);
     assert_eq!(values["B2"], 2.0);
 }
@@ -1455,7 +1455,148 @@ fn filter_if_empty_is_lazy() {
 #[test]
 fn min_max_of_all_blanks_are_zero() {
     let cells = [("B1", "=MIN(A1:A3)"), ("B2", "=MAX(A1:A3)")];
-    let values = calculate_spreadsheet(&cells).unwrap();
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
     assert_eq!(values["B1"], 0.0);
     assert_eq!(values["B2"], 0.0);
+}
+
+#[test]
+fn replacements_end_to_end_match_readme_scenario() {
+    let cells = [
+        ("A1", "__NAME__"),
+        ("B1", "NAME"),
+        ("C1", "__UNKNOWN__"),
+        ("D1", "=__RATE__*2"),
+        ("E1", "=F1+1"),
+        ("F1", "=__A1__"),
+    ];
+    let mut replacements = HashMap::new();
+    replacements.insert("__NAME__".into(), ReplacementValue::from_text("Alice"));
+    replacements.insert("__RATE__".into(), ReplacementValue::from_i64(10));
+    replacements.insert("__A1__".into(), ReplacementValue::from_i64(7));
+
+    let outcome = calculate_spreadsheet(&cells, CalculateOptions { replacements: Some(&replacements), ..Default::default() }).unwrap();
+    let values = outcome.values;
+    assert!(outcome.ignored_replacement_keys.is_empty());
+    assert_eq!(values["A1"], CellValue::Text("Alice".into()));
+    assert_eq!(values["B1"], CellValue::Text("NAME".into()));
+    assert_eq!(values["C1"], CellValue::Text("__UNKNOWN__".into()));
+    assert_eq!(values["D1"], 20.0);
+    assert_eq!(values["E1"], 8.0);
+    assert_eq!(values["F1"], 7.0);
+}
+
+#[test]
+fn replacements_unknown_in_formula_coerces_like_missing_cell() {
+    // Missing / non-input names coerce to 0 (same as `=Z99`), not UnknownCell.
+    let cells = [("A1", "=__MISS__*2"), ("A2", "=__MISS__+1")];
+    let replacements = HashMap::new();
+    let values = calculate_spreadsheet(&cells, CalculateOptions { replacements: Some(&replacements), ..Default::default() })
+        .unwrap()
+        .values;
+    assert_eq!(values["A1"], 0.0);
+    assert_eq!(values["A2"], 1.0);
+}
+
+#[test]
+fn replacements_skip_placeholders_inside_string_literals() {
+    let mut replacements = HashMap::new();
+    replacements.insert("__NAME__".into(), ReplacementValue::from_text("Alice"));
+    let values = calculate_spreadsheet(
+        &[
+            ("A1", "=\"Hi __NAME__\""),
+            ("B1", "=\"Hi \"&__NAME__"),
+        ],
+        CalculateOptions { replacements: Some(&replacements), ..Default::default() },
+    )
+    .unwrap()
+    .values;
+    assert_eq!(values["A1"], CellValue::Text("Hi __NAME__".into()));
+    assert_eq!(values["B1"], CellValue::Text("Hi Alice".into()));
+}
+
+#[test]
+fn formulas_require_leading_equals_excel_like() {
+    // Without `=`, SUM(1) is text — not evaluated.
+    let values = calculate_spreadsheet(
+        &[("A1", "SUM(1)"), ("B1", "hello"), ("C1", "=SUM(1)")],
+        CalculateOptions::default(),
+    )
+    .unwrap()
+    .values;
+    assert_eq!(values["A1"], CellValue::Text("SUM(1)".into()));
+    assert_eq!(values["B1"], CellValue::Text("hello".into()));
+    assert_eq!(values["C1"], 1.0);
+}
+
+#[test]
+fn amp_concatenates_text_and_cells() {
+    let cells = [
+        ("C1", "Alice"),
+        ("A1", "=\"Hi \"&C1"),
+        ("A2", "=\"Hi \"&C1&\"!\""),
+        ("N1", "10"),
+        ("A3", "=\"x\"&N1"),
+        ("A4", "=\"x\"&Z99"), // blank → empty string
+        ("A5", "=N1&N1"),
+    ];
+    let values = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap().values;
+    assert_eq!(values["A1"], CellValue::Text("Hi Alice".into()));
+    assert_eq!(values["A2"], CellValue::Text("Hi Alice!".into()));
+    assert_eq!(values["A3"], CellValue::Text("x10".into()));
+    assert_eq!(values["A4"], CellValue::Text("x".into()));
+    assert_eq!(values["A5"], CellValue::Text("1010".into()));
+}
+
+#[test]
+fn amp_concat_with_placeholder_replacement() {
+    let cells = [("A1", "=\"Hi \"&__NAME__"), ("B1", "=__NAME__&\" \"&__RATE__")];
+    let mut replacements = HashMap::new();
+    replacements.insert("__NAME__".into(), ReplacementValue::from_text("Alice"));
+    replacements.insert("__RATE__".into(), ReplacementValue::from_i64(10));
+    let values = calculate_spreadsheet(&cells, CalculateOptions { replacements: Some(&replacements), ..Default::default() })
+        .unwrap()
+        .values;
+    assert_eq!(values["A1"], CellValue::Text("Hi Alice".into()));
+    assert_eq!(values["B1"], CellValue::Text("Alice 10".into()));
+}
+
+#[test]
+fn amp_has_lower_precedence_than_arithmetic() {
+    // 1+2&3 → "33" in Excel ( (1+2) & 3 )
+    let values = calculate_spreadsheet(&[("A1", "=1+2&3")], CalculateOptions::default())
+        .unwrap()
+        .values;
+    assert_eq!(values["A1"], CellValue::Text("33".into()));
+}
+
+#[test]
+fn replacements_with_custom_thresholds() {
+    let cells = [("A1", "=__N__+1")];
+    let mut replacements = HashMap::new();
+    replacements.insert("__N__".into(), ReplacementValue::from_f64(10.0));
+    let thresholds = ParallelThresholds {
+        min_layer_width: usize::MAX,
+        min_layer_work: usize::MAX,
+    };
+    let values =
+        calculate_spreadsheet(&cells, CalculateOptions { replacements: Some(&replacements), thresholds: Some(thresholds) })
+            .unwrap()
+            .values;
+    assert_eq!(values["A1"], 11.0);
+}
+
+#[test]
+fn replacements_report_ignored_invalid_keys() {
+    let cells = [("A1", "=__OK__+1")];
+    let mut replacements = HashMap::new();
+    replacements.insert("__OK__".into(), ReplacementValue::from_i64(3));
+    replacements.insert("bad".into(), ReplacementValue::from_i64(9));
+    replacements.insert("__name__".into(), ReplacementValue::from_text("x"));
+    let outcome = calculate_spreadsheet(&cells, CalculateOptions { replacements: Some(&replacements), ..Default::default() }).unwrap();
+    assert_eq!(outcome.values["A1"], 4.0);
+    assert_eq!(
+        outcome.ignored_replacement_keys,
+        vec!["__name__".to_string(), "bad".to_string()]
+    );
 }

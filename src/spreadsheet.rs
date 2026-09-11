@@ -40,6 +40,7 @@ impl<'a> EvalContext<'a> {
                     .and_then(|row| row.first())
                     .copied()
                     .ok_or(SpreadsheetError::Value),
+                EvalValue::Text(_) => Err(SpreadsheetError::Value),
             };
         }
         if let Some(value) = self.cache.get(cell_name) {
@@ -61,7 +62,7 @@ impl<'a> EvalContext<'a> {
         if let Some(value) = self.lookup_binding(cell_name) {
             return match value {
                 EvalValue::Number(n) => Ok(Some(*n)),
-                EvalValue::Array(_) => Ok(None),
+                EvalValue::Array(_) | EvalValue::Text(_) => Ok(None),
             };
         }
         if let Some(value) = self.cache.get(cell_name) {
@@ -75,8 +76,11 @@ impl<'a> EvalContext<'a> {
     }
 
     pub(crate) fn count_cell_kind(&self, cell_name: &str) -> CellKind {
-        if self.lookup_binding(cell_name).is_some() {
-            return CellKind::Number;
+        if let Some(value) = self.lookup_binding(cell_name) {
+            return match value {
+                EvalValue::Number(_) | EvalValue::Array(_) => CellKind::Number,
+                EvalValue::Text(_) => CellKind::Text,
+            };
         }
         if self.cache.contains_key(cell_name) {
             CellKind::Number
@@ -92,6 +96,17 @@ impl<'a> EvalContext<'a> {
             .get(cell_name)
             .cloned()
             .ok_or(SpreadsheetError::Value)
+    }
+
+    /// Text coercion for `&`: blank/missing → `""`, numbers via [`crate::format_number`].
+    pub(crate) fn concat_cell_text(&self, cell_name: &str) -> Result<String, SpreadsheetError> {
+        if let Some(text) = self.text_cells.get(cell_name) {
+            return Ok(text.clone());
+        }
+        if let Some(n) = self.cache.get(cell_name) {
+            return Ok(crate::format_number(*n));
+        }
+        Ok(String::new())
     }
 }
 

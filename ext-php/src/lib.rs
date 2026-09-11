@@ -2,7 +2,12 @@
 
 use std::collections::HashMap;
 
-use calc_spreadsheet::{calculate_spreadsheet_with_thresholds, CellValue, ParallelThresholds};
+use calc_spreadsheet::{
+    calculate_spreadsheet, format_number, CalculateOptions, CellValue, ParallelThresholds,
+    ReplacementValue,
+};
+use ext_php_rs::error::php_error;
+use ext_php_rs::flags::ErrorType;
 use ext_php_rs::prelude::*;
 
 /// PHP から受け取るセル値。数値リテラルは計算エンジン向けに文字列化する。
@@ -24,8 +29,18 @@ impl From<PhpCellInput> for String {
     fn from(value: PhpCellInput) -> Self {
         match value {
             PhpCellInput::Long(n) => n.to_string(),
-            PhpCellInput::Number(n) => n.to_string(),
+            PhpCellInput::Number(n) => format_number(n),
             PhpCellInput::Text(s) => s,
+        }
+    }
+}
+
+impl From<PhpCellInput> for ReplacementValue {
+    fn from(value: PhpCellInput) -> Self {
+        match value {
+            PhpCellInput::Long(n) => ReplacementValue::from_i64(n),
+            PhpCellInput::Number(n) => ReplacementValue::from_f64(n),
+            PhpCellInput::Text(s) => ReplacementValue::from_text(s),
         }
     }
 }
@@ -68,16 +83,35 @@ fn resolve_thresholds(
     })
 }
 
+fn warn_ignored_replacement_keys(keys: &[String]) {
+    if keys.is_empty() {
+        return;
+    }
+    let list = keys.join(", ");
+    let message = format!(
+        "calc_spreadsheet: ignored invalid replacement key(s): {list} (expected __[A-Z0-9]+__)"
+    );
+    php_error(&ErrorType::UserWarning, &message);
+}
+
 /// 連想配列 `['A1' => '=1+2', ...]` を受け取り、計算後の連想配列を返す。
 ///
-/// 第2・第3引数で並列適応の閾値（層幅・仕事量）を上書きできる。省略時はエンジン既定値。
+/// 第2引数で `__NAME__` 形式のプレースホルダを置換する。
+/// 不正な置換キーは無視し、`E_USER_WARNING` を出す（計算は続行）。
+/// 第3・第4引数で並列適応の閾値（層幅・仕事量）を上書きできる。省略時はエンジン既定値。
 #[php_function]
 pub fn calc_spreadsheet(
     cells: HashMap<String, PhpCellInput>,
+    replacements: Option<HashMap<String, PhpCellInput>>,
     min_layer_width: Option<i64>,
     min_layer_work: Option<i64>,
 ) -> Result<HashMap<String, PhpCellOutput>, PhpException> {
     let thresholds = resolve_thresholds(min_layer_width, min_layer_work)?;
+    let replacements: HashMap<String, ReplacementValue> = replacements
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, ReplacementValue::from(v)))
+        .collect();
     let owned: Vec<(String, String)> = cells
         .into_iter()
         .map(|(name, value)| (name, String::from(value)))
@@ -87,9 +121,17 @@ pub fn calc_spreadsheet(
         .map(|(name, expr)| (name.as_str(), expr.as_str()))
         .collect();
 
-    calculate_spreadsheet_with_thresholds(&input, thresholds)
-        .map(|values| {
-            values
+    calculate_spreadsheet(
+        &input,
+        CalculateOptions {
+            replacements: Some(&replacements),
+            thresholds: Some(thresholds),
+        },
+    )
+        .map(|outcome| {
+            warn_ignored_replacement_keys(&outcome.ignored_replacement_keys);
+            outcome
+                .values
                 .into_iter()
                 .map(|(name, value)| (name, PhpCellOutput::from(value)))
                 .collect()

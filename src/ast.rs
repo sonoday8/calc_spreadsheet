@@ -11,12 +11,14 @@ use crate::refs::{
 };
 use crate::spreadsheet::{CellKind, EvalContext};
 
-/// Intermediate evaluation value (numbers and numeric arrays).
+/// Intermediate evaluation value (numbers, numeric arrays, and text).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum EvalValue {
     Number(f64),
     /// Row-major rectangle: `rows[r][c]`.
     Array(Vec<Vec<f64>>),
+    /// Scalar text (e.g. `&` concatenation result).
+    Text(String),
 }
 
 impl EvalValue {
@@ -29,6 +31,7 @@ impl EvalValue {
                 .and_then(|row| row.first())
                 .copied()
                 .ok_or(SpreadsheetError::Value),
+            EvalValue::Text(_) => Err(SpreadsheetError::Value),
         }
     }
 
@@ -49,6 +52,7 @@ impl EvalValue {
                 }
                 Ok(EvalValue::Array(out))
             }
+            EvalValue::Text(_) => Err(SpreadsheetError::Value),
         }
     }
 }
@@ -90,6 +94,8 @@ pub(crate) enum BinOp {
     Sub,
     Mul,
     Div,
+    /// Excel `&` string concatenation.
+    Concat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,6 +307,15 @@ pub(crate) fn eval_value(
         Expr::Intersect(inner) => Ok(EvalValue::Number(eval_intersect(inner, ctx, source)?)),
         Expr::Str(_) => Err(SpreadsheetError::Value),
         Expr::Neg(inner) => eval_value(inner, ctx, source)?.map_numbers(|n| Ok(-n)),
+        Expr::BinOp {
+            op: BinOp::Concat,
+            left,
+            right,
+        } => {
+            let l = eval_concat_operand(left, ctx, source)?;
+            let r = eval_concat_operand(right, ctx, source)?;
+            Ok(EvalValue::Text(l + &r))
+        }
         Expr::BinOp { op, left, right } => {
             let l = eval_value(left, ctx, source)?;
             let r = eval_value(right, ctx, source)?;
@@ -783,6 +798,7 @@ fn apply_const_binop(op: BinOp, l: f64, r: f64) -> Option<f64> {
         BinOp::Mul => Some(l * r),
         BinOp::Div if r != 0.0 => Some(l / r),
         BinOp::Div => None,
+        BinOp::Concat => None,
     }
 }
 
@@ -1236,6 +1252,34 @@ fn apply_binop(op: BinOp, l: f64, r: f64) -> Result<f64, SpreadsheetError> {
                 Ok(l / r)
             }
         }
+        BinOp::Concat => Err(SpreadsheetError::Value),
+    }
+}
+
+/// Excel `&`: coerce operands to text (blank → `""`, numbers via [`crate::format_number`]).
+fn eval_concat_operand(
+    expr: &Expr,
+    ctx: &EvalContext<'_>,
+    source: &str,
+) -> Result<String, SpreadsheetError> {
+    match expr {
+        Expr::Str(text) => Ok(text.clone()),
+        Expr::Number(n) => Ok(crate::format_number(*n)),
+        Expr::Cell(name) => {
+            if let Some(bound) = ctx.lookup_binding(name) {
+                return eval_value_to_concat_text(bound.clone());
+            }
+            ctx.concat_cell_text(name)
+        }
+        other => eval_value_to_concat_text(eval_value(other, ctx, source)?),
+    }
+}
+
+fn eval_value_to_concat_text(value: EvalValue) -> Result<String, SpreadsheetError> {
+    match value {
+        EvalValue::Text(s) => Ok(s),
+        EvalValue::Number(n) => Ok(crate::format_number(n)),
+        EvalValue::Array(_) => Err(SpreadsheetError::Value),
     }
 }
 
@@ -1328,6 +1372,7 @@ fn zip_values(
 
             Err(SpreadsheetError::Value)
         }
+        (_, EvalValue::Text(_)) | (EvalValue::Text(_), _) => Err(SpreadsheetError::Value),
     }
 }
 
@@ -1753,6 +1798,7 @@ fn flatten_numeric_args(
                         out.extend(row);
                     }
                 }
+                EvalValue::Text(_) => {}
             },
         }
     }
@@ -1794,6 +1840,8 @@ fn count_args(
                 EvalValue::Array(rows) => {
                     n += rows.iter().map(|row| row.len()).sum::<usize>();
                 }
+                EvalValue::Text(_) if count_text => n += 1,
+                EvalValue::Text(_) => {}
             },
         }
     }
@@ -2076,7 +2124,7 @@ struct AstParser<'a> {
 
 impl<'a> AstParser<'a> {
     fn parse_comparison(&mut self) -> Result<Expr, SpreadsheetError> {
-        let mut left = self.parse_sum()?;
+        let mut left = self.parse_concat()?;
         loop {
             self.skip_whitespace();
             let op = if self.match_str(">=") {
@@ -2094,12 +2142,31 @@ impl<'a> AstParser<'a> {
             } else {
                 return Ok(left);
             };
-            let right = self.parse_sum()?;
+            let right = self.parse_concat()?;
             left = Expr::CmpOp {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             };
+        }
+    }
+
+    /// Excel `&` — lower than `+`/`-`, higher than comparisons.
+    fn parse_concat(&mut self) -> Result<Expr, SpreadsheetError> {
+        let mut left = self.parse_sum()?;
+        loop {
+            self.skip_whitespace();
+            if self.peek() == Some('&') {
+                self.position += 1;
+                let right = self.parse_sum()?;
+                left = Expr::BinOp {
+                    op: BinOp::Concat,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                };
+            } else {
+                return Ok(left);
+            }
         }
     }
 

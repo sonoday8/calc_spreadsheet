@@ -1,13 +1,13 @@
 # calc_spreadsheet
 
-Excel / PhpSpreadsheet に寄せた計算式を評価する Rust ライブラリです。数値・文字列セル、依存解決、適応的並列評価、動的配列（スピル）に対応しています。
+Excel / PhpSpreadsheet に寄せた計算式を評価する Rust ライブラリです。数値・文字列セル、依存解決、適応的並列評価、動的配列（スピル）、プレースホルダ置換に対応しています。
 
 License: MIT（[`LICENSE`](LICENSE)）
 
 ## 使い方
 
 ```rust
-use calc_spreadsheet::{calculate_spreadsheet, CellValue};
+use calc_spreadsheet::{calculate_spreadsheet, CalculateOptions, CellValue};
 
 let cells = [
     ("A1", "2"),
@@ -18,7 +18,8 @@ let cells = [
     ("D1", "=SEQUENCE(3)"),
 ];
 
-let values = calculate_spreadsheet(&cells)?;
+let outcome = calculate_spreadsheet(&cells, CalculateOptions::default())?;
+let values = outcome.values;
 assert_eq!(values["C1"], CellValue::Number(80.0));
 assert_eq!(values["D1"], CellValue::Number(1.0));
 assert_eq!(values["D2"], CellValue::Number(2.0)); // スピル
@@ -34,17 +35,26 @@ cargo test
 
 | 項目 | 内容 |
 |---|---|
-| `calculate_spreadsheet(cells)` | デフォルト閾値で層ごとに seq / rayon を自動選択 |
-| `calculate_spreadsheet_with_thresholds(cells, thresholds)` | 幅・仕事量の閾値を指定して適応並列 |
+| `calculate_spreadsheet(cells, options)` | 唯一の計算入口。置換・閾値は `CalculateOptions` で任意指定 |
+| `CalculateOptions` | `replacements` / `thresholds`（どちらも `None` で既定） |
+| `SpreadsheetOutcome` | `values` と `ignored_replacement_keys`（不正キー警告用） |
+| `ReplacementValue` | `from_i64` / `from_f64` / `from_text` のみ（内部表現は非公開） |
+| `format_number` | 数値の正規文字列化（PHP 拡張などが利用） |
 | `ParallelThresholds` | `min_layer_width` / `min_layer_work`（`Default` は 4096 / 327680） |
 | `CellValue` | `Number(f64)` / `Text(String)` |
 | `SpreadsheetError` | 循環参照・不正数式・ゼロ除算・`#NUM!` / `#VALUE!` / `#SPILL!` / `#CALC!` |
 
-入力は `&[(&str, &str)]`（セル名 → 式またはリテラル）。戻りは評価後の全セル（スピル先を含む）の `HashMap` です。セル名は大文字小文字を区別しません。
+入力は `&[(&str, &str)]`（セル名 → 式またはリテラル）。戻りは `SpreadsheetOutcome`（`values` に評価後の全セル。スピル先を含む）。セル名は大文字小文字を区別しません。
+
+**Excel 寄せの入力規則（すべての計算 API 共通）:**
+
+- **数式は `=` で始める**（`SUM(1)` のように `=` 無しは式にせずテキスト）
+- **数値リテラル**（`10` / `1.5`）はそのまま数値
+- **裸の非数値テキスト**は文字列セルとして扱う
 
 ## 数式・配列
 
-- **演算:** `+ - * /`、比較 `> < >= <= = == <> !=`
+- **演算:** `+ - * /`、文字列連結 `&`（算術より低く比較より高い）、比較 `> < >= <= = == <> !=`
 - **範囲:** A1 形式（例: `A1:A3`）。AST 上は端点のみ保持し、参照解析・集計時にストリーム展開
 - **要素演算:** 同形配列同士、スカラー↔配列、Excel 風の **1×N ⊗ M×1** ブロードキャスト。それ以外の形状不一致は `#VALUE!`
 - **スピル:** 配列結果はアンカーから矩形に配置し、戻り値にスピル先を含む。入力セルや他式の値と衝突すると `#SPILL!`。書き込み前にフットプリント全体を検証するため、失敗時に半端なスピルは残しません。同一アンカーの再評価では旧スピル領域を消してから書き直します
@@ -76,6 +86,59 @@ cargo test
 
 動的配列は現状 **数値配列のみ** です。`FILTER` の `include` は行ベクトルまたは列ベクトルを想定しています。
 
+## プレースホルダ置換
+
+実装は `src/replace.rs`。評価前にセル文字列へ `__[A-Z0-9]+__` を埋め込みます。値は文字列か数字のみ（式は入れない）。`ReplacementValue` は `from_i64` / `from_f64` / `from_text` でのみ生成します。セル前処理（`prepare_*`）はクレート内専用です。
+
+入力規則（`=` 必須など）は上の「公開 API」と同じで、置換マップが空でも前処理は走ります。
+
+| セルの書き方 | 意味 |
+|---|---|
+| `A1` / `=A1` | セル参照 |
+| `__A1__` / `__NAME__` | プレースホルダ |
+
+- `NAME` や `__name__`、`_NAME_`、`__USER_NAME__`（内側に `_`）は置換しない（**無視し、呼び出し側へ報告**。Rust は `ignored_replacement_keys`、PHP は `E_USER_WARNING`。計算は続行）
+- マップに無い `__FOO__` は残す。テキストセルなら文字として返す（置換し忘れが見える）。**式に残すと欠落セル同様に 0 扱い**（`=Z99` と同じ）
+- `__NAME__` が `__NAMESPACE__` の一部になることはない
+- 置換値の中の `__FOO__` は再展開しない
+- `=` で始まる置換値は式にせずテキストとして入れる
+- **Excel 文字列リテラル（`"..."`、`""` エスケープ）の内側は置換しない**。クォートの外だけ置換する（例: `="Hi "&__NAME__` → `="Hi "&"Alice"` → 結果 `Hi Alice`）
+- **隣接プレースホルダは区切りを書く**（`=__A__&__B__` や `=__A__+__B__`）。`=__A____B__` のように繋ぐと、テキストは `="X""Y"`（中に `"` が入る1文字列）になり、数値どうしは桁がくっつく
+
+```rust
+use calc_spreadsheet::{
+    calculate_spreadsheet, CalculateOptions, ReplacementValue,
+};
+use std::collections::HashMap;
+
+let cells = [
+    ("A1", "__NAME__"),
+    ("B1", "NAME"),
+    ("C1", "__UNKNOWN__"),
+    ("D1", "=__RATE__*2"),
+    ("E1", "=F1+1"),
+    ("F1", "=__A1__"),
+];
+let mut replacements = HashMap::new();
+replacements.insert("__NAME__".into(), ReplacementValue::from_text("Alice"));
+replacements.insert("__RATE__".into(), ReplacementValue::from_i64(10));
+replacements.insert("__A1__".into(), ReplacementValue::from_i64(7));
+
+let outcome = calculate_spreadsheet(
+    &cells,
+    CalculateOptions {
+        replacements: Some(&replacements),
+        ..Default::default()
+    },
+)?;
+let values = outcome.values;
+// outcome.ignored_replacement_keys に不正キー（あれば）
+// A1 = Alice, B1 = NAME, C1 = __UNKNOWN__（テキスト）
+// D1 = 20, E1 = 8, F1 = 7
+```
+
+Excel のシート上限（xlsx）は列 A〜XFD、行 1〜1048576 です。セル番地に `__` は使いません。
+
 ## 並列の適応判定
 
 各評価層について次を満たすときだけ rayon を使います。
@@ -95,45 +158,45 @@ cargo run --release --example bench_threshold
 
 出力末尾の `min_layer_width` / `min_layer_work` を次に渡します。
 
-- Rust: `calculate_spreadsheet_with_thresholds(cells, ParallelThresholds { … })`
-- PHP: `calc_spreadsheet($cells, $min_layer_width, $min_layer_work)`
+- Rust: `calculate_spreadsheet(cells, CalculateOptions { thresholds: Some(ParallelThresholds { … }), ..Default::default() })`
+- PHP: `calc_spreadsheet($cells, [], $min_layer_width, $min_layer_work)`（第2引数は置換マップ）
 
 **ホスト依存:** デフォルトはキャリブレーションしたマシン向けです。別 CPU では必ず再計測してください。
 
 ## PHP 拡張 (`ext-php/`)
 
-クレート名は `calc_spreadsheet_php`（cdylib）。ビルドには PHP 開発ヘッダと [ext-php-rs](https://github.com/davidcole1340/ext-php-rs) が必要です。
+クレート名は `calc_spreadsheet_php`（cdylib）。型変換と引数受け渡しのみで、計算・置換は本体に委譲します。ビルドには PHP 開発ヘッダと [ext-php-rs](https://github.com/davidcole1340/ext-php-rs) が必要です。詳細なビルド手順は [`ext-php/README.md`](ext-php/README.md)。
 
 ```bash
 cargo build -p calc_spreadsheet_php --release
 ```
 
-成果物（Linux 例）: `target/release/libcalc_spreadsheet_php.so`
-
-1. `extension_dir` へコピーするか、絶対パスで指定する
-2. `php.ini`（または追加 ini）に例えば次を書く
+成果物（Linux 例）: `target/release/libcalc_spreadsheet_php.so` を `extension_dir` へ置くか、`php.ini` でパス指定します。
 
 ```ini
 extension=calc_spreadsheet_php
-; または
-; extension=/absolute/path/to/libcalc_spreadsheet_php.so
 ```
-
-3. 確認: `php -m | grep calc_spreadsheet` および `php -r 'var_export(calc_spreadsheet(["A1"=>"1","B1"=>"=A1+1"]));'`
 
 ```php
+calc_spreadsheet(
+    array $cells,
+    array $replacements = [],
+    ?int $min_layer_width = null,
+    ?int $min_layer_work = null
+): array
+
 $result = calc_spreadsheet($cells);
-// 閾値を上書きする場合:
-$result = calc_spreadsheet($cells, $min_layer_width, $min_layer_work);
+$result = calc_spreadsheet($cells, ['__NAME__' => 'Alice', '__RATE__' => 10]);
+$result = calc_spreadsheet($cells, [], $min_layer_width, $min_layer_work);
 ```
 
-混合シートの簡易計測例: `ext-php/examples/test.php`
+プレースホルダ規則は上の「プレースホルダ置換」と同じです。簡易計測例: `ext-php/examples/test.php`
 
 ## 非対応（スコープ外）
 
 - シート参照（`Sheet1!A1`）
 - `INDIRECT` / 構造化参照
-- テキスト配列の動的配列
+- テキスト配列の動的配列（`&` はスカラー連結のみ。配列との `&` は `#VALUE!`）
 - 非 A1 名セルからの幾何スピル（左上のみ採用）
 - Excel 全関数・全版差・全ブロードキャスト規則の完全再現
 - `LET` の Excel 全意味論（名前影の細部など）の完全再現
@@ -151,10 +214,11 @@ $result = calc_spreadsheet($cells, $min_layer_width, $min_layer_work);
 | `functions.rs` | 即時評価の集計・数学・論理関数 |
 | `excel_date.rs` | Excel 日付シリアル・`DATEDIF` など |
 | `parser.rs` | 純粋文字列リテラル判定 |
+| `replace.rs` | プレースホルダ置換（`__[A-Z0-9]+__`） |
 | `value.rs` / `error.rs` | `CellValue` / `SpreadsheetError` |
 | `tests.rs` | 統合テスト |
 | `main.rs` | 日付関数の簡単なデモバイナリ |
-| `ext-php/` | PHP 拡張（`calc_spreadsheet_php`） |
+| `ext-php/` | PHP 拡張ラッパ（`calc_spreadsheet_php`） |
 
 ## ベンチ
 

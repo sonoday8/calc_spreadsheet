@@ -2,6 +2,10 @@ use std::fmt;
 
 #[derive(Debug, PartialEq)]
 pub enum SpreadsheetError {
+    /// Internal: evaluating a cell that has no AST.
+    ///
+    /// Missing / blank cell *references* in formulas (e.g. `=Z99`) coerce to `0`
+    /// like Excel and do **not** produce this error.
     UnknownCell(String),
     CircularReference(String),
     InvalidFormula(String),

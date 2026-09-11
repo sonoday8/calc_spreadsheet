@@ -70,12 +70,15 @@ fn main() {
         );
         println!("suggested thresholds (exact crossing; add margin if you want extra safety):");
         println!("  Rust:");
-        println!("    ParallelThresholds {{");
-        println!("        min_layer_width: {width},");
-        println!("        min_layer_work: {work},");
+        println!("    CalculateOptions {{");
+        println!("        thresholds: Some(ParallelThresholds {{");
+        println!("            min_layer_width: {width},");
+        println!("            min_layer_work: {work},");
+        println!("        }}),");
+        println!("        ..Default::default()");
         println!("    }}");
         println!("  PHP:");
-        println!("    calc_spreadsheet($cells, {width}, {work});");
+        println!("    calc_spreadsheet($cells, [], {width}, {work});");
         println!(
             "vs crate defaults ({}/{}): {}",
             defaults.min_layer_width,

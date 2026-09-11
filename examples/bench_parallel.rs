@@ -10,7 +10,7 @@
 use std::time::{Duration, Instant};
 
 use calc_spreadsheet::{
-    calculate_spreadsheet, calculate_spreadsheet_with_parallel, CellValue,
+    calculate_spreadsheet, calculate_spreadsheet_with_parallel, CalculateOptions, CellValue,
 };
 
 // Narrow-but-many light layers: forced rayon pays spawn cost; adaptive stays sequential.
@@ -46,7 +46,7 @@ fn main() {
     for _ in 0..WARMUP {
         let _ = calculate_spreadsheet_with_parallel(&cells, false).unwrap();
         let _ = calculate_spreadsheet_with_parallel(&cells, true).unwrap();
-        let _ = calculate_spreadsheet(&cells).unwrap();
+        let _ = calculate_spreadsheet(&cells, CalculateOptions::default()).unwrap();
     }
 
     let seq = measure_forced(&cells, false, ITERATIONS);
@@ -55,7 +55,9 @@ fn main() {
 
     let seq_values = calculate_spreadsheet_with_parallel(&cells, false).unwrap();
     let par_values = calculate_spreadsheet_with_parallel(&cells, true).unwrap();
-    let adaptive_values = calculate_spreadsheet(&cells).unwrap();
+    let adaptive_values = calculate_spreadsheet(&cells, CalculateOptions::default())
+        .unwrap()
+        .values;
     assert_eq!(seq_values.len(), par_values.len());
     assert_eq!(seq_values.len(), adaptive_values.len());
     for (name, seq_value) in &seq_values {
@@ -105,7 +107,11 @@ fn measure_forced(cells: &[(&str, &str)], parallel: bool, iterations: usize) -> 
 }
 
 fn measure_adaptive(cells: &[(&str, &str)], iterations: usize) -> Stats {
-    measure(iterations, || calculate_spreadsheet(cells).unwrap())
+    measure(iterations, || {
+        calculate_spreadsheet(cells, CalculateOptions::default())
+            .unwrap()
+            .values
+    })
 }
 
 fn measure<F>(iterations: usize, mut run: F) -> Stats

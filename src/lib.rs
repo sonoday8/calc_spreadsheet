@@ -6,6 +6,7 @@ mod excel_date;
 mod functions;
 mod parser;
 mod refs;
+mod replace;
 mod spreadsheet;
 mod value;
 
@@ -14,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use rayon::prelude::*;
 
 pub use error::SpreadsheetError;
+pub use replace::{format_number, ReplacementValue};
 pub use value::CellValue;
 
 use ast::{
@@ -26,7 +28,7 @@ use spreadsheet::{evaluate_formula, is_pure_string_expression, pure_string_value
 
 /// Host-local defaults from `examples/bench_threshold` (AST path, 2026-09-05):
 /// first stable speedup >= 1.1 at width=4096 × refs/cell=80.
-/// Override per call via [`calculate_spreadsheet_with_thresholds`].
+/// Override per call via [`CalculateOptions::thresholds`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParallelThresholds {
     /// Minimum cells in a layer before rayon is considered.
@@ -44,18 +46,40 @@ impl Default for ParallelThresholds {
     }
 }
 
-pub fn calculate_spreadsheet(
-    cells: &[(&str, &str)],
-) -> Result<HashMap<String, CellValue>, SpreadsheetError> {
-    calculate_spreadsheet_with_thresholds(cells, ParallelThresholds::default())
+/// Optional inputs for [`calculate_spreadsheet`].
+///
+/// - `replacements: None` — empty map (Excel-like prep still runs)
+/// - `thresholds: None` — [`ParallelThresholds::default`]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CalculateOptions<'a> {
+    pub replacements: Option<&'a HashMap<String, ReplacementValue>>,
+    pub thresholds: Option<ParallelThresholds>,
 }
 
-/// Adaptive parallel evaluation with caller-supplied layer width / work thresholds.
-pub fn calculate_spreadsheet_with_thresholds(
+/// Evaluation result (values plus any ignored invalid replacement keys).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpreadsheetOutcome {
+    pub values: HashMap<String, CellValue>,
+    pub ignored_replacement_keys: Vec<String>,
+}
+
+/// Evaluate a sheet with optional placeholder replacements and parallel thresholds.
+///
+/// Always runs Excel-like cell prep first: formulas must start with `=`, and bare
+/// non-numeric text becomes a string cell.
+pub fn calculate_spreadsheet(
     cells: &[(&str, &str)],
-    thresholds: ParallelThresholds,
-) -> Result<HashMap<String, CellValue>, SpreadsheetError> {
-    calculate_spreadsheet_inner(cells, ParallelPolicy::Adaptive(thresholds))
+    options: CalculateOptions<'_>,
+) -> Result<SpreadsheetOutcome, SpreadsheetError> {
+    let empty = HashMap::new();
+    let replacements = options.replacements.unwrap_or(&empty);
+    let thresholds = options.thresholds.unwrap_or_default();
+    let prepared = replace::prepare_cells(cells, replacements);
+    let values = evaluate_prepared_cells(&prepared.cells, ParallelPolicy::Adaptive(thresholds))?;
+    Ok(SpreadsheetOutcome {
+        values,
+        ignored_replacement_keys: prepared.ignored_replacement_keys,
+    })
 }
 
 /// Forces layer-inner rayon on or off for every layer (benchmarks / diagnostics).
@@ -64,13 +88,25 @@ pub fn calculate_spreadsheet_with_parallel(
     cells: &[(&str, &str)],
     parallel: bool,
 ) -> Result<HashMap<String, CellValue>, SpreadsheetError> {
-    calculate_spreadsheet_inner(cells, ParallelPolicy::Force(parallel))
+    let prepared = replace::prepare_cells(cells, &HashMap::new());
+    evaluate_prepared_cells(&prepared.cells, ParallelPolicy::Force(parallel))
 }
 
 #[derive(Clone, Copy)]
 enum ParallelPolicy {
     Adaptive(ParallelThresholds),
     Force(bool),
+}
+
+fn evaluate_prepared_cells(
+    cells: &[(String, String)],
+    policy: ParallelPolicy,
+) -> Result<HashMap<String, CellValue>, SpreadsheetError> {
+    let input: Vec<(&str, &str)> = cells
+        .iter()
+        .map(|(name, expr)| (name.as_str(), expr.as_str()))
+        .collect();
+    calculate_spreadsheet_inner(&input, policy)
 }
 
 fn calculate_spreadsheet_inner(
@@ -212,7 +248,14 @@ fn calculate_spreadsheet_inner(
         let mut layer_results = layer_results;
         layer_results.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, value) in layer_results {
-            apply_eval_to_cache(&name, value, &occupied, &mut cache, &mut spill_meta)?;
+            apply_eval_to_cache(
+                &name,
+                value,
+                &occupied,
+                &mut cache,
+                &mut text_cells,
+                &mut spill_meta,
+            )?;
         }
 
         let layer_set: HashSet<&str> = layer.iter().map(String::as_str).collect();
@@ -224,7 +267,7 @@ fn calculate_spreadsheet_inner(
                 layer_set.contains(reader.as_str()) || layer_set.contains(anchor.as_str())
             })
             .flat_map(|(reader, anchor)| [reader.clone(), anchor.clone()])
-            .filter(|cell| cache.contains_key(cell))
+            .filter(|cell| cache.contains_key(cell) || text_cells.contains_key(cell))
             .collect();
         if !touched.is_empty() {
             fixup_soft_spill_closure(
@@ -233,7 +276,7 @@ fn calculate_spreadsheet_inner(
                 &dependencies,
                 &asts,
                 &sources,
-                &text_cells,
+                &mut text_cells,
                 &occupied,
                 &mut cache,
                 &mut spill_meta,
@@ -249,7 +292,7 @@ fn calculate_spreadsheet_inner(
         &dependencies,
         &asts,
         &sources,
-        &text_cells,
+        &mut text_cells,
         &occupied,
         &mut cache,
         &mut spill_meta,
@@ -257,6 +300,9 @@ fn calculate_spreadsheet_inner(
 
     for (name, value) in cache {
         values.insert(name, CellValue::Number(value));
+    }
+    for (name, text) in text_cells {
+        values.entry(name).or_insert(CellValue::Text(text));
     }
 
     Ok(values)
@@ -270,7 +316,7 @@ fn fixup_soft_spill_closure(
     dependencies: &HashMap<String, HashSet<String>>,
     asts: &HashMap<String, Expr>,
     sources: &HashMap<String, String>,
-    text_cells: &HashMap<String, String>,
+    text_cells: &mut HashMap<String, String>,
     occupied: &HashSet<String>,
     cache: &mut HashMap<String, f64>,
     spill_meta: &mut HashMap<String, (usize, usize)>,
@@ -330,7 +376,7 @@ fn fixup_soft_spill_closure(
             let mut layer = layer;
             layer.sort();
             for name in layer {
-                let before = cell_fingerprint(name.as_str(), cache, spill_meta);
+                let before = cell_fingerprint(name.as_str(), cache, text_cells, spill_meta);
                 reevaluate_cell(
                     &name,
                     asts,
@@ -340,7 +386,7 @@ fn fixup_soft_spill_closure(
                     cache,
                     spill_meta,
                 )?;
-                if cell_fingerprint(name.as_str(), cache, spill_meta) != before {
+                if cell_fingerprint(name.as_str(), cache, text_cells, spill_meta) != before {
                     any = true;
                 }
             }
@@ -355,6 +401,7 @@ fn fixup_soft_spill_closure(
 fn cell_fingerprint(
     name: &str,
     cache: &HashMap<String, f64>,
+    text_cells: &HashMap<String, String>,
     spill_meta: &HashMap<String, (usize, usize)>,
 ) -> Vec<(String, u64)> {
     let mut keys = vec![name.to_string()];
@@ -370,7 +417,18 @@ fn cell_fingerprint(
     keys.sort();
     keys.into_iter()
         .map(|k| {
-            let bits = cache.get(&k).copied().unwrap_or(f64::NAN).to_bits();
+            let bits = if let Some(n) = cache.get(&k) {
+                n.to_bits()
+            } else if let Some(t) = text_cells.get(&k) {
+                // Stable-ish fingerprint for text formula results.
+                let mut h = 0u64;
+                for b in t.as_bytes() {
+                    h = h.wrapping_mul(16777619).wrapping_add(u64::from(*b));
+                }
+                h
+            } else {
+                f64::NAN.to_bits()
+            };
             (k, bits)
         })
         .collect()
@@ -380,7 +438,7 @@ fn reevaluate_cell(
     name: &str,
     asts: &HashMap<String, Expr>,
     sources: &HashMap<String, String>,
-    text_cells: &HashMap<String, String>,
+    text_cells: &mut HashMap<String, String>,
     occupied: &HashSet<String>,
     cache: &mut HashMap<String, f64>,
     spill_meta: &mut HashMap<String, (usize, usize)>,
@@ -398,7 +456,7 @@ fn reevaluate_cell(
         evaluate_formula(&ctx, name)?
     };
     // apply_eval_to_cache clears any prior footprint for this anchor.
-    apply_eval_to_cache(name, value, occupied, cache, spill_meta)
+    apply_eval_to_cache(name, value, occupied, cache, text_cells, spill_meta)
 }
 
 /// True if `from` transitively depends on `to` following `deps[cell] → prerequisites`.
@@ -470,12 +528,20 @@ fn apply_eval_to_cache(
     value: EvalValue,
     occupied: &HashSet<String>,
     cache: &mut HashMap<String, f64>,
+    text_cells: &mut HashMap<String, String>,
     spill_meta: &mut HashMap<String, (usize, usize)>,
 ) -> Result<(), SpreadsheetError> {
     match value {
         EvalValue::Number(n) => {
             clear_anchor_spill_footprint(anchor, cache, spill_meta);
+            text_cells.remove(anchor);
             cache.insert(anchor.to_string(), n);
+            Ok(())
+        }
+        EvalValue::Text(s) => {
+            clear_anchor_spill_footprint(anchor, cache, spill_meta);
+            cache.remove(anchor);
+            text_cells.insert(anchor.to_string(), s);
             Ok(())
         }
         EvalValue::Array(rows) => {
@@ -486,12 +552,14 @@ fn apply_eval_to_cache(
             }
             if height == 1 && width == 1 {
                 clear_anchor_spill_footprint(anchor, cache, spill_meta);
+                text_cells.remove(anchor);
                 cache.insert(anchor.to_string(), rows[0][0]);
                 return Ok(());
             }
 
             let Some((col, row)) = parse_a1(anchor) else {
                 clear_anchor_spill_footprint(anchor, cache, spill_meta);
+                text_cells.remove(anchor);
                 cache.insert(anchor.to_string(), rows[0][0]);
                 return Ok(());
             };
@@ -514,13 +582,17 @@ fn apply_eval_to_cache(
                 if occupied.contains(target) {
                     return Err(SpreadsheetError::Spill);
                 }
-                if cache.contains_key(target) && !reusable.contains(target) {
+                if (cache.contains_key(target) || text_cells.contains_key(target))
+                    && !reusable.contains(target)
+                {
                     return Err(SpreadsheetError::Spill);
                 }
             }
 
             clear_anchor_spill_footprint(anchor, cache, spill_meta);
+            text_cells.remove(anchor);
             for (target, n) in planned {
+                text_cells.remove(&target);
                 cache.insert(target, n);
             }
             spill_meta.insert(anchor.to_string(), (height, width));

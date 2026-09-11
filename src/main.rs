@@ -1,4 +1,4 @@
-use calc_spreadsheet::calculate_spreadsheet;
+use calc_spreadsheet::{calculate_spreadsheet, CalculateOptions};
 
 fn main() {
     let cells = [
@@ -11,12 +11,12 @@ fn main() {
         ("B4", "=DATEDIF(DATE(2007, 1, 31), DATE(2007, 3, 1), \"MD\")"),
     ];
 
-    match calculate_spreadsheet(&cells) {
-        Ok(values) => {
-            let mut sorted_keys: Vec<_> = values.keys().collect();
+    match calculate_spreadsheet(&cells, CalculateOptions::default()) {
+        Ok(outcome) => {
+            let mut sorted_keys: Vec<_> = outcome.values.keys().collect();
             sorted_keys.sort();
             for cell in sorted_keys {
-                println!("{cell}: {}", values[cell]);
+                println!("{cell}: {}", outcome.values[cell]);
             }
         }
         Err(error) => eprintln!("error: {error}"),
