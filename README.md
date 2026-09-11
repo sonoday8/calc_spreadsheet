@@ -228,4 +228,36 @@ cargo run --release --example bench_parallel
 
 # 幅 × refs/cell グリッドから推奨閾値を出す（ホスト依存）
 cargo run --release --example bench_threshold
+
+# 大量セル + プレースホルダ置換の負荷計測（Rust）
+cargo run --release --example bench_replace_load
+
+# 同上（PHP 拡張）
+cargo build -p calc_spreadsheet_php --release
+php -d extension=./target/release/libcalc_spreadsheet_php.so \
+    ext-php/examples/bench_replace_load.php
 ```
+
+### 計測環境（2026-09-11）
+
+| 項目 | 内容 |
+|---|---|
+| CPU | Intel Core i7-14700（20 コア / 28 スレッド） |
+| メモリ | 約 16 GB |
+| OS | Windows 11 Home 64-bit |
+| 実行 | WSL2（Ubuntu 24.04）、Rust `--release` / PHP 8.5.10 NTS + `calc_spreadsheet_php` release |
+
+※ ホスト依存。別マシンでは再計測してください。
+
+### `bench_replace_load` 結果（大規模プロファイル）
+
+シート: 葉 1024 + 中間 8192 + 連結 32 + 重い層 8192 ≒ **17,440 セル**。置換キー **512**、式内プレースホルダ約 **98,336**。warmup 2、iterations 5。
+
+| 経路 | Rust avg / min | PHP avg / min |
+|---|---:|---:|
+| 置換あり | **366.1 / 362.4 ms** | **384.9 / 377.1 ms** |
+| 置換なし（同じ式のまま、未置換 `__R*__` は 0） | 389.0 / 383.9 ms | 400.8 / 392.2 ms |
+
+- 出力セル数はいずれも 17,440。サンプル `H0 = 14117`
+- PHP は Rust 本体＋拡張の FFI／HashMap 変換込みで、同規模でおおよそ **+5% 前後**
+- 置換ありの方がやや速いことがある（未置換トークンを欠落セルとして扱うコスト差）

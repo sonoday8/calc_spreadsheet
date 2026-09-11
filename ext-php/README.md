@@ -38,6 +38,10 @@ $result = calc_spreadsheet($cells, [], $min_layer_width, $min_layer_work);
 cargo test                              # 本体（置換テスト含む）
 cargo build -p calc_spreadsheet_php --release
 php -d extension=./target/release/libcalc_spreadsheet_php.so ext-php/examples/test.php
+
+# 大量セル + 置換の負荷計測（結果はルート README「ベンチ」）
+php -d extension=./target/release/libcalc_spreadsheet_php.so \
+    ext-php/examples/bench_replace_load.php
 ```
 
 `php.ini` に載せる場合:
