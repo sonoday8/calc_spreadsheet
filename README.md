@@ -191,7 +191,7 @@ $result = calc_spreadsheet($cells, ['__NAME__' => 'Alice', '__RATE__' => 10]);
 $result = calc_spreadsheet($cells, [], $min_layer_width, $min_layer_work);
 ```
 
-プレースホルダ規則は上の「プレースホルダ置換」と同じです。簡易計測例: `ext-php/examples/test.php`
+プレースホルダ規則は上の「プレースホルダ置換」と同じです。簡易実行例: [`ext-php/examples/test.php`](ext-php/examples/test.php)。負荷計測は下の「ベンチ」を参照。
 
 ## Node / TypeScript (`ext-node/`)
 
@@ -212,7 +212,7 @@ const result2 = calcSpreadsheet(cells, { __NAME__: 'Alice', __RATE__: 10 })
 const result3 = calcSpreadsheet(cells, {}, minLayerWidth, minLayerWork)
 ```
 
-プレースホルダ規則は上の「プレースホルダ置換」と同じです。不正キーは `console.warn`。簡易計測例: `ext-node/examples/test.mjs`
+プレースホルダ規則は上の「プレースホルダ置換」と同じです。不正キーは `console.warn`。簡易実行例: [`ext-node/examples/test.mjs`](ext-node/examples/test.mjs)。負荷計測は下の「ベンチ」を参照。
 
 ## 非対応（スコープ外）
 
@@ -225,21 +225,21 @@ const result3 = calcSpreadsheet(cells, {}, minLayerWidth, minLayerWork)
 
 ## ソース構成
 
-| ファイル | 役割 |
+| パス | 役割 |
 |---|---|
-| `lib.rs` | 公開 API・層評価・スピル配置・FILTER soft-skip fixup |
-| `ast.rs` | 式のパース・評価・参照解析（単一 AST） |
-| `dynamic_array.rs` | `SEQUENCE` / `UNIQUE` / `SORT` / `FILTER` |
-| `deps.rs` | 依存グラフ・評価層分け |
-| `refs.rs` | A1 範囲・仕事量・サイズ上限 |
-| `spreadsheet.rs` | 評価コンテキスト（`LET` 束縛を含む） |
-| `functions.rs` | 即時評価の集計・数学・論理関数 |
-| `excel_date.rs` | Excel 日付シリアル・`DATEDIF` など |
-| `parser.rs` | 純粋文字列リテラル判定 |
-| `replace.rs` | プレースホルダ置換（`__[A-Z0-9]+__`） |
-| `value.rs` / `error.rs` | `CellValue` / `SpreadsheetError` |
-| `tests.rs` | 統合テスト |
-| `main.rs` | 日付関数の簡単なデモバイナリ |
+| `src/lib.rs` | 公開 API・層評価・スピル配置・FILTER soft-skip fixup |
+| `src/ast.rs` | 式のパース・評価・参照解析（単一 AST） |
+| `src/dynamic_array.rs` | `SEQUENCE` / `UNIQUE` / `SORT` / `FILTER` |
+| `src/deps.rs` | 依存グラフ・評価層分け |
+| `src/refs.rs` | A1 範囲・仕事量・サイズ上限 |
+| `src/spreadsheet.rs` | 評価コンテキスト（`LET` 束縛を含む） |
+| `src/functions.rs` | 即時評価の集計・数学・論理関数 |
+| `src/excel_date.rs` | Excel 日付シリアル・`DATEDIF` など |
+| `src/parser.rs` | 純粋文字列リテラル判定 |
+| `src/replace.rs` | プレースホルダ置換（`__[A-Z0-9]+__`） |
+| `src/value.rs` / `src/error.rs` | `CellValue` / `SpreadsheetError` |
+| `src/tests.rs` | 統合テスト |
+| `src/main.rs` | 日付関数の簡単なデモバイナリ |
 | `ext-php/` | PHP 拡張ラッパ（`calc_spreadsheet_php`） |
 | `ext-node/` | Node / TypeScript バインディング（`calc_spreadsheet_node`） |
 
@@ -277,13 +277,40 @@ cd ext-node && npm run bench
 
 ### `bench_replace_load` 結果（大規模プロファイル）
 
-シート: 葉 1024 + 中間 8192 + 連結 32 + 重い層 8192 ≒ **17,440 セル**。置換キー **512**、式内プレースホルダ約 **98,336**。warmup 2、iterations 5。
+[`examples/bench_replace_load.rs`](examples/bench_replace_load.rs) と、同パラメータの [`ext-php/examples/bench_replace_load.php`](ext-php/examples/bench_replace_load.php) / [`ext-node/examples/bench_replace_load.mjs`](ext-node/examples/bench_replace_load.mjs) で計測。入力セル数＝出力セル数 **17,440**（スピルなし）。
+
+#### シート構成
+
+| 層 | セル名 | 個数 | 内容 |
+|---|---|---:|---|
+| 葉 | `L0` … `L1023` | 1,024 | 定数 `(i % 97)`。プレースホルダなし |
+| 中間 | `M0` … `M8191` | 8,192 | `=SUM(葉 8 個, プレースホルダ 6 個)` |
+| 連結 | `C0` … `C31` | 32 | `="id="&__R…__&M…`（文字列連結。テキスト置換も混在） |
+| 重い層 | `H0` … `H8191` | 8,192 | `=SUM(中間 40 個, プレースホルダ 6 個)` |
+| **合計** | | **17,440** | |
+
+#### プレースホルダ／置換
+
+- 置換マップ: `__R0__` … `__R511__`（**512** キー）
+  - `i % 17 == 0` → テキスト `"Ti"`
+  - それ以外 → 数値 `(i % 97) + 1`
+- 中間・重い層の各式にプレースホルダ **6** 個（テキスト用キーは避け、数値キーを選ぶ）
+- 式中の `__R` トークン合計: 約 **98,336**（置換前）
+
+#### 計測条件
+
+- warmup **2** → 計測 iterations **5**（表の avg / min はこの 5 回）
+- 並列閾値はエンジン既定（`ParallelThresholds` 未指定）
+- **置換あり**: 上記マップを渡す
+- **置換なし**: 同じ式のままマップ空。未置換 `__R*__` は欠落セル同様 **0**
+- 正しさの確認: サンプル `H0 = 14117`（数値）
 
 | 経路 | Rust avg / min | PHP avg / min | Node avg / min |
 |---|---:|---:|---:|
 | 置換あり | **360.8 / 357.2 ms** | **400.5 / 395.4 ms** | **391.3 / 385.1 ms** |
-| 置換なし（同じ式のまま、未置換 `__R*__` は 0） | 379.1 / 374.8 ms | 417.6 / 413.8 ms | 415.4 / 404.1 ms |
+| 置換なし | 379.1 / 374.8 ms | 417.6 / 413.8 ms | 415.4 / 404.1 ms |
 
-- 出力セル数はいずれも 17,440。サンプル `H0 = 14117`
-- PHP / Node は Rust 本体＋バインディングの FFI／オブジェクト変換込み。同規模・置換ありで PHP はおおよそ **+11%**、Node はおおよそ **+8%**
+- Rust は本体の直接呼び出し。PHP / Node はバインディングの FFI／オブジェクト変換込み
+- 同規模・置換ありで、Rust 比 PHP はおおよそ **+11%**、Node はおおよそ **+8%**
 - 置換ありの方がやや速いことがある（未置換トークンを欠落セルとして扱うコスト差）
+- 短い計測（iterations 5）のため、実行環境や負荷によって数％〜十数％揺れ得る
