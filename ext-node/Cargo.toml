@@ -1,0 +1,18 @@
+[package]
+name = "calc_spreadsheet_node"
+version = "0.1.0"
+edition = "2021"
+description = "Node.js / TypeScript binding for calc_spreadsheet"
+license = "MIT"
+repository = "https://github.com/sonoday8/calc_spreadsheet"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+calc_spreadsheet = { path = ".." }
+napi = "3"
+napi-derive = "3"
+
+[build-dependencies]
+napi-build = "2"

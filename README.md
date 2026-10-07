@@ -39,7 +39,7 @@ cargo test
 | `CalculateOptions` | `replacements` / `thresholds`（どちらも `None` で既定） |
 | `SpreadsheetOutcome` | `values` と `ignored_replacement_keys`（不正キー警告用） |
 | `ReplacementValue` | `from_i64` / `from_f64` / `from_text` のみ（内部表現は非公開） |
-| `format_number` | 数値の正規文字列化（PHP 拡張などが利用） |
+| `format_number` | 数値の正規文字列化（PHP / Node バインディングなどが利用） |
 | `ParallelThresholds` | `min_layer_width` / `min_layer_work`（`Default` は 4096 / 327680） |
 | `CellValue` | `Number(f64)` / `Text(String)` |
 | `SpreadsheetError` | 循環参照・不正数式・ゼロ除算・`#NUM!` / `#VALUE!` / `#SPILL!` / `#CALC!` |
@@ -97,7 +97,7 @@ cargo test
 | `A1` / `=A1` | セル参照 |
 | `__A1__` / `__NAME__` | プレースホルダ |
 
-- `NAME` や `__name__`、`_NAME_`、`__USER_NAME__`（内側に `_`）は置換しない（**無視し、呼び出し側へ報告**。Rust は `ignored_replacement_keys`、PHP は `E_USER_WARNING`。計算は続行）
+- `NAME` や `__name__`、`_NAME_`、`__USER_NAME__`（内側に `_`）は置換しない（**無視し、呼び出し側へ報告**。Rust は `ignored_replacement_keys`、PHP は `E_USER_WARNING`、Node は `console.warn`。計算は続行）
 - マップに無い `__FOO__` は残す。テキストセルなら文字として返す（置換し忘れが見える）。**式に残すと欠落セル同様に 0 扱い**（`=Z99` と同じ）
 - `__NAME__` が `__NAMESPACE__` の一部になることはない
 - 置換値の中の `__FOO__` は再展開しない
@@ -160,6 +160,7 @@ cargo run --release --example bench_threshold
 
 - Rust: `calculate_spreadsheet(cells, CalculateOptions { thresholds: Some(ParallelThresholds { … }), ..Default::default() })`
 - PHP: `calc_spreadsheet($cells, [], $min_layer_width, $min_layer_work)`（第2引数は置換マップ）
+- Node: `calcSpreadsheet(cells, {}, minLayerWidth, minLayerWork)`
 
 **ホスト依存:** デフォルトはキャリブレーションしたマシン向けです。別 CPU では必ず再計測してください。
 
@@ -192,6 +193,27 @@ $result = calc_spreadsheet($cells, [], $min_layer_width, $min_layer_work);
 
 プレースホルダ規則は上の「プレースホルダ置換」と同じです。簡易計測例: `ext-php/examples/test.php`
 
+## Node / TypeScript (`ext-node/`)
+
+クレート名は `calc_spreadsheet_node`（cdylib）、npm パッケージ名は `calc_spreadsheet`。[napi-rs](https://napi.rs) によるネイティブアドオンで、NestJS などから利用できます。型変換と受け渡しのみで、計算・置換は本体に委譲します。詳細は [`ext-node/README.md`](ext-node/README.md)。
+
+```bash
+cd ext-node
+npm install
+npm run build
+npm test
+```
+
+```ts
+import { calcSpreadsheet } from 'calc_spreadsheet'
+
+const result = calcSpreadsheet(cells)
+const result2 = calcSpreadsheet(cells, { __NAME__: 'Alice', __RATE__: 10 })
+const result3 = calcSpreadsheet(cells, {}, minLayerWidth, minLayerWork)
+```
+
+プレースホルダ規則は上の「プレースホルダ置換」と同じです。不正キーは `console.warn`。簡易計測例: `ext-node/examples/test.mjs`
+
 ## 非対応（スコープ外）
 
 - シート参照（`Sheet1!A1`）
@@ -219,6 +241,7 @@ $result = calc_spreadsheet($cells, [], $min_layer_width, $min_layer_work);
 | `tests.rs` | 統合テスト |
 | `main.rs` | 日付関数の簡単なデモバイナリ |
 | `ext-php/` | PHP 拡張ラッパ（`calc_spreadsheet_php`） |
+| `ext-node/` | Node / TypeScript バインディング（`calc_spreadsheet_node`） |
 
 ## ベンチ
 
@@ -236,6 +259,9 @@ cargo run --release --example bench_replace_load
 cargo build -p calc_spreadsheet_php --release
 php -d extension=./target/release/libcalc_spreadsheet_php.so \
     ext-php/examples/bench_replace_load.php
+
+# 同上（Node バインディング）
+cd ext-node && npm run bench
 ```
 
 ### 計測環境（2026-09-11）

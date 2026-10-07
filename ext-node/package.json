@@ -1,0 +1,33 @@
+{
+  "name": "calc_spreadsheet",
+  "version": "0.1.0",
+  "description": "Node.js / TypeScript binding for calc_spreadsheet",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sonoday8/calc_spreadsheet.git"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "example": "npm run build && node examples/test.mjs",
+    "bench": "npm run build && node examples/bench_replace_load.mjs"
+  },
+  "napi": {
+    "binaryName": "calc_spreadsheet"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3"
+  }
+}

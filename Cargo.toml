@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/sonoday8/calc_spreadsheet"
 
 [workspace]
-members = [".", "ext-php"]
+members = [".", "ext-php", "ext-node"]
 resolver = "2"
 
 [dependencies]
